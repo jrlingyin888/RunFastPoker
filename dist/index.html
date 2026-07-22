@@ -5,34 +5,67 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>跑得快记分</title>
 <style>
+:root {
+  --felt-dark: #0c3b20;
+  --felt: #14532d;
+  --felt-light: #1b6b3a;
+  --gold: #d4af37;
+  --gold-soft: #f0d98c;
+  --cream: #fffdf6;
+  --ink: #1f2937;
+  --win: #b45309;
+  --lose: #047857;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f3f4f6; color: #111827; }
-#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); }
-h1 { font-size: 22px; }
-.card { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-.btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 15px; font-size: 17px; font-weight: 600; background: #e5e7eb; color: #111827; cursor: pointer; }
-.btn-primary { background: #2563eb; color: #fff; }
-.btn-danger { background: #fee2e2; color: #b91c1c; }
-.btn-sm { display: inline-block; width: auto; padding: 9px 14px; font-size: 14px; }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 0; border-bottom: 1px solid #f3f4f6; font-size: 16px; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: linear-gradient(160deg, var(--felt) 0%, var(--felt-dark) 100%) fixed;
+  color: var(--cream);
+  min-height: 100vh;
+}
+body::before {
+  content: "♠"; position: fixed; top: -40px; right: -30px; font-size: 220px;
+  color: rgba(255,255,255,.045); pointer-events: none; z-index: 0;
+}
+body::after {
+  content: "♥"; position: fixed; bottom: -50px; left: -30px; font-size: 240px;
+  color: rgba(0,0,0,.12); pointer-events: none; z-index: 0;
+}
+#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); position: relative; z-index: 1; }
+h1 { font-size: 24px; color: var(--gold-soft); text-shadow: 0 1px 2px rgba(0,0,0,.4); letter-spacing: 2px; }
+.card { background: var(--cream); color: var(--ink); border-radius: 16px; padding: 16px; margin-bottom: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.28), inset 0 0 0 1px rgba(212,175,55,.25); }
+.btn { display: block; width: 100%; border: 0; border-radius: 14px; padding: 15px; font-size: 17px; font-weight: 600;
+  background: #ece7d8; color: var(--ink); cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.btn-primary { background: linear-gradient(180deg, var(--felt-light), #135231); color: var(--gold-soft);
+  border: 1.5px solid var(--gold); text-shadow: 0 1px 1px rgba(0,0,0,.35); }
+.btn-danger { background: #7f1d1d; color: #fecaca; }
+.btn-sm { display: inline-block; width: auto; padding: 9px 14px; font-size: 14px; border-radius: 10px; box-shadow: none; border: 1px solid #d1cbb8; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 0; border-bottom: 1px dashed #d8d2c0; font-size: 16px; }
 .row:last-child { border-bottom: 0; }
-.pos { color: #dc2626; font-weight: 700; }
-.neg { color: #059669; font-weight: 700; }
+.pos { color: var(--win); font-weight: 800; }
+.neg { color: var(--lose); font-weight: 800; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { padding: 10px 16px; border-radius: 999px; background: #f3f4f6; border: 1.5px solid #e5e7eb; font-size: 16px; cursor: pointer; }
-.chip.on { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; font-weight: 600; }
+.chip { padding: 10px 16px; border-radius: 999px; background: #f6f1e2; border: 1.5px solid #d1cbb8; font-size: 16px; cursor: pointer; color: var(--ink); }
+.chip.on { background: var(--felt-light); border-color: var(--gold); color: var(--gold-soft); font-weight: 700; }
 .numgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
-.numgrid button { padding: 11px 0; border-radius: 8px; border: 1.5px solid #e5e7eb; background: #fff; font-size: 16px; cursor: pointer; }
-.numgrid button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
-input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 16px; }
-.muted { color: #6b7280; font-size: 13px; }
-.badge { display: inline-block; padding: 3px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 600; border: 0; cursor: pointer; }
+.numgrid button { padding: 12px 0; border-radius: 9px; border: 1px solid #d1cbb8; background: #fff; font-size: 17px; font-weight: 600;
+  color: var(--ink); cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.numgrid button.on { background: var(--felt-light); color: var(--gold-soft); border-color: var(--gold); }
+.overlay { position: fixed; inset: 0; background: rgba(4,24,13,.72); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; border-radius: 10px; font-size: 16px; background: #fff; color: var(--ink); }
+.muted { color: rgba(255,253,246,.78); font-size: 13px; }
+.card .muted { color: #6b7280; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 700; border: 0; cursor: pointer; }
 .topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.topbar .title { font-weight: 700; font-size: 18px; }
-.back { border: 0; background: none; font-size: 16px; color: #2563eb; padding: 4px; cursor: pointer; }
-.section-title { font-weight: 600; margin-bottom: 10px; }
+.topbar .title { font-weight: 800; font-size: 18px; color: var(--gold-soft); text-shadow: 0 1px 2px rgba(0,0,0,.4); }
+.back { border: 0; background: none; font-size: 16px; color: var(--gold-soft); padding: 4px; cursor: pointer; }
+.section-title { font-weight: 700; margin-bottom: 10px; }
 .gap { height: 10px; }
+.sync-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: rgba(0,0,0,.28);
+  border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 14px; }
+.sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; }
+.sync-dot.off { background: #f59e0b; }
 
 </style>
 </head>
