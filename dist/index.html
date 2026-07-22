@@ -857,7 +857,10 @@ var RunfastShare = (function () {
       online.uid = RunfastSync.getUid();
       const { data } = await RunfastSync.readRoom(code);
       if (data === null) {
-        localStorage.removeItem('runfast.sync.room');
+        // 只有失败的房号就是本机保存的那个时才清掉，避免误删仍有效的“回到联机房间”
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
+        if (saved && saved.code === code) localStorage.removeItem('runfast.sync.room');
         alert('房号不存在或已关闭');
         render();
         return;
