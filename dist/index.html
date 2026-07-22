@@ -182,7 +182,10 @@ var RunfastSync = (function () {
   'use strict';
 
   // Task 6 由控制器替换为真实值
-  const FB = { apiKey: '__FB_API_KEY__', databaseURL: '__FB_DB_URL__' };
+  const FB = {
+    apiKey: 'AIzaSyDr-5S8Q9jcDUxu4ebJUpz58NzjejTjjgE',
+    databaseURL: 'https://runfast-scorer-default-rtdb.asia-southeast1.firebasedatabase.app',
+  };
   const configured = () => !FB.apiKey.startsWith('__');
 
   // ---------- 纯函数 ----------
@@ -207,6 +210,18 @@ var RunfastSync = (function () {
     if (data === null) delete node[last];
     else node[last] = data;
     return next;
+  }
+
+  // RTDB 不存储空数组/空对象：读回的 session 需补回数组字段，否则 .length/.map 会崩
+  function normalizeRoom(room) {
+    if (room && room.session) {
+      const s = room.session;
+      s.players ||= [];
+      s.activePlayers ||= [];
+      s.rounds ||= [];
+      s.rounds.forEach((r) => { r.losers ||= []; });
+    }
+    return room;
   }
 
   // ---------- 匿名认证 ----------
@@ -276,7 +291,7 @@ var RunfastSync = (function () {
     const res = await fetch(roomUrl(code) + '?auth=' + token, { headers: { 'X-Firebase-ETag': 'true' } });
     if (res.status === 401 || res.status === 403) throw new Error('没有修改权限');
     if (!res.ok) throw new Error('读取失败 ' + res.status);
-    return { data: await res.json(), etag: res.headers.get('ETag') };
+    return { data: normalizeRoom(await res.json()), etag: res.headers.get('ETag') };
   }
 
   async function writeRoom(code, data, etag) {
@@ -372,7 +387,7 @@ var RunfastSync = (function () {
   function onEvt(e) {
     if (!cb) return; // close() 之后到达的迟到事件
     const { path, data } = JSON.parse(e.data);
-    room = applyEvent(room, path, data);
+    room = normalizeRoom(applyEvent(room, path, data));
     if (room === null) { if (cb.onDeleted) cb.onDeleted(); return; }
     if (cb.onRoom) cb.onRoom(room);
   }
@@ -385,7 +400,7 @@ var RunfastSync = (function () {
     es = null; room = null; currentCode = null; cb = null;
   }
 
-  const api = { configured, genRoomCode, validRoomCode, canEdit, canAdmin, applyEvent,
+  const api = { configured, genRoomCode, validRoomCode, canEdit, canAdmin, applyEvent, normalizeRoom,
     signIn, getUid, createRoom, readRoom, subscribe, mutate, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;

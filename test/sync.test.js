@@ -44,6 +44,17 @@ test('applyEvent：子路径定点更新不改原对象', () => {
   assert.ok(!('status' in next3.session));
 });
 
-test('configured：占位符未替换时为 false', () => {
-  assert.equal(S.configured(), false);
+test('configured：Firebase 配置已填入时为 true', () => {
+  assert.equal(S.configured(), true);
+});
+
+test('normalizeRoom：RTDB 丢掉的空数组字段被补回', () => {
+  const room = { creatorUid: 'u1', allowEdit: false, session: { id: 's1' } };
+  const n = S.normalizeRoom(room);
+  assert.deepEqual(n.session.players, []);
+  assert.deepEqual(n.session.activePlayers, []);
+  assert.deepEqual(n.session.rounds, []);
+  const room2 = { creatorUid: 'u1', session: { id: 's1', rounds: [{ id: 'r1', winner: 'A' }] } };
+  assert.deepEqual(S.normalizeRoom(room2).session.rounds[0].losers, []);
+  assert.equal(S.normalizeRoom(null), null);
 });
