@@ -63,3 +63,83 @@ test('roundTransfers：剩 0 张的玩家不产生转账', () => {
   const ts = L.roundTransfers(round, 100);
   assert.deepEqual(ts, [{ from: '王五', to: '张三', cards: 3, fen: 300 }]);
 });
+
+function demoSession() {
+  return {
+    createdAt: '2026-07-22T20:00:00+08:00',
+    pricePerCardFen: 100,
+    players: ['张三', '李四', '王五', '戴六'],
+    rounds: [
+      {
+        id: 'r1', winner: '张三',
+        losers: [
+          { name: '李四', cardsLeft: 4, shutout: false },
+          { name: '王五', cardsLeft: 2, shutout: false },
+          { name: '戴六', cardsLeft: 10, shutout: true },
+        ],
+      },
+      {
+        id: 'r2', winner: '李四',
+        losers: [
+          { name: '张三', cardsLeft: 1, shutout: false },
+          { name: '王五', cardsLeft: 3, shutout: false },
+          { name: '戴六', cardsLeft: 5, shutout: false },
+        ],
+      },
+    ],
+  };
+}
+
+test('sessionNet：两局累计，净额和为 0', () => {
+  const net = L.sessionNet(demoSession());
+  assert.deepEqual(net, [
+    { name: '张三', cards: 25, fen: 2500 },
+    { name: '李四', cards: 5, fen: 500 },
+    { name: '王五', cards: -5, fen: -500 },
+    { name: '戴六', cards: -25, fen: -2500 },
+  ]);
+  assert.equal(net.reduce((s, p) => s + p.fen, 0), 0);
+});
+
+test('sessionNet：中途加入未参与任何局的人净额为 0', () => {
+  const s = demoSession();
+  s.players.push('钱七');
+  const net = L.sessionNet(s);
+  assert.deepEqual(net[4], { name: '钱七', cards: 0, fen: 0 });
+});
+
+test('settleUp：最简转账，按人汇总与净额一致', () => {
+  const net = L.sessionNet(demoSession());
+  const pays = L.settleUp(net);
+  assert.deepEqual(pays, [
+    { from: '戴六', to: '张三', fen: 2500 },
+    { from: '王五', to: '李四', fen: 500 },
+  ]);
+  assert.ok(pays.length <= net.length - 1);
+});
+
+test('settleUp：一个债务人还多个债权人', () => {
+  const pays = L.settleUp([
+    { name: 'A', fen: 300 },
+    { name: 'B', fen: 200 },
+    { name: 'C', fen: -500 },
+  ]);
+  assert.deepEqual(pays, [
+    { from: 'C', to: 'A', fen: 300 },
+    { from: 'C', to: 'B', fen: 200 },
+  ]);
+});
+
+test('settleUp：全部打平返回空数组', () => {
+  assert.deepEqual(L.settleUp([{ name: 'A', fen: 0 }, { name: 'B', fen: 0 }]), []);
+});
+
+test('summaryText：包含标题、盈亏与转账行', () => {
+  const text = L.summaryText(demoSession());
+  assert.ok(text.includes('跑得快战绩'));
+  assert.ok(text.includes('共 2 局'));
+  assert.ok(text.includes('1元/张'));
+  assert.ok(text.includes('张三：+25 元'));
+  assert.ok(text.includes('戴六：-25 元'));
+  assert.ok(text.includes('戴六 → 张三：25 元'));
+});

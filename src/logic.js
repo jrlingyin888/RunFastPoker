@@ -40,7 +40,62 @@ var RunfastLogic = (function () {
       });
   }
 
-  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers };
+  // 整场累计净额。包含 session.players 中所有人（未参局者为 0），顺序同 players。
+  function sessionNet(session) {
+    const net = {};
+    const entry = (n) => (net[n] ||= { name: n, cards: 0, fen: 0 });
+    session.players.forEach(entry);
+    session.rounds.forEach((round) => {
+      roundTransfers(round, session.pricePerCardFen).forEach((t) => {
+        entry(t.from).cards -= t.cards; entry(t.from).fen -= t.fen;
+        entry(t.to).cards += t.cards;   entry(t.to).fen += t.fen;
+      });
+    });
+    return session.players.map((n) => net[n]);
+  }
+
+  // 最简转账：欠最多的与赢最多的贪心配对，笔数 <= 人数-1
+  function settleUp(net) {
+    const debtors = [], creditors = [];
+    net.forEach((p) => {
+      if (p.fen < 0) debtors.push({ name: p.name, fen: -p.fen });
+      else if (p.fen > 0) creditors.push({ name: p.name, fen: p.fen });
+    });
+    debtors.sort((a, b) => b.fen - a.fen);
+    creditors.sort((a, b) => b.fen - a.fen);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const pay = Math.min(debtors[i].fen, creditors[j].fen);
+      out.push({ from: debtors[i].name, to: creditors[j].name, fen: pay });
+      debtors[i].fen -= pay; creditors[j].fen -= pay;
+      if (debtors[i].fen === 0) i++;
+      if (creditors[j].fen === 0) j++;
+    }
+    return out;
+  }
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  // 战绩纯文本（复制到聊天工具）
+  function summaryText(session) {
+    const d = new Date(session.createdAt);
+    const lines = [];
+    lines.push('【跑得快战绩】' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
+    lines.push('共 ' + session.rounds.length + ' 局 · ' + fenToYuan(session.pricePerCardFen) + '元/张');
+    lines.push('— 盈亏 —');
+    sessionNet(session)
+      .slice().sort((a, b) => b.fen - a.fen)
+      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 元'));
+    const pays = settleUp(sessionNet(session));
+    if (pays.length) {
+      lines.push('— 转账 —');
+      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 元'));
+    }
+    return lines.join('\n');
+  }
+
+  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, sessionNet, settleUp, summaryText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
