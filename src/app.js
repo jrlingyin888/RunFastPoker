@@ -426,7 +426,10 @@
       alert(ok ? '已复制，去粘贴发给牌友吧' : '复制失败，请改用「分享战绩图」或截图');
     },
 
-    shareImage() { alert('分享战绩图即将上线'); }, // Task 9 接线
+    shareImage(sid) {
+      const s = db.sessions.find((x) => x.id === sid);
+      RunfastShare.share(s, L);
+    },
 
     exportData() {
       const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
