@@ -1020,7 +1020,10 @@ var RunfastShare = (function () {
 
     leaveRoom() {
       if (!confirm('退出房间？（随时可用房号再进来）')) return;
+      const code = online.code;
       leaveOnline();
+      // 主动退出保留房号，首页「回到联机房间」可一键回来；结束/被关房的清除逻辑不受影响
+      try { localStorage.setItem('runfast.sync.room', JSON.stringify({ code })); } catch (e) { /* 忽略 */ }
       App.goHome();
     },
 
