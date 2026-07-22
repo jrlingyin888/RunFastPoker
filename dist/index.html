@@ -359,6 +359,26 @@ var RunfastShare = (function () {
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   };
   const activeSession = () => db.sessions.find((s) => s.status === 'active') || null;
+
+  // ---------- 联机状态（Task 5 接线；本地模式恒 inactive） ----------
+  const online = { active: false, code: null, room: null, status: 'idle', uid: null };
+  function sessionCtx() { return online.active ? online.room.session : activeSession(); }
+  async function commitSession(mutator) {
+    if (online.active) {
+      try {
+        await RunfastSync.mutate(online.code, (room) => {
+          mutator(room.session);
+          room.updatedAt = Date.now();
+          return room;
+        });
+      } catch (e) { alert('同步失败，请检查网络后重试'); }
+    } else {
+      mutator(activeSession());
+      saveDB();
+      render();
+    }
+  }
+
   const topbar = (title, backJs) =>
     `<div class="topbar">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div></div>`;
 
@@ -449,7 +469,7 @@ var RunfastShare = (function () {
   }
 
   VIEWS.session = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     if (!s) return VIEWS.home();
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     return `
@@ -463,6 +483,9 @@ var RunfastShare = (function () {
       <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
       <div style="display:flex;gap:10px;margin-top:10px">
         <button class="btn" onclick="App.goPlayers()">玩家管理</button>
+        <button class="btn" onclick="App.voidSession()">作废本场</button>
+      </div>
+      <div style="margin-top:10px">
         <button class="btn btn-danger" onclick="App.finishSession()">结束本场</button>
       </div>
       <div class="card" style="margin-top:12px">
@@ -483,7 +506,7 @@ var RunfastShare = (function () {
   }
 
   VIEWS.record = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     const ps = view.participants;
     const w = view.winner;
     const losers = ps.filter((n) => n !== w);
@@ -571,7 +594,7 @@ var RunfastShare = (function () {
 
   // ---------- 玩家管理 ----------
   VIEWS.players = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     return `
       ${topbar('玩家管理', 'App.goSession()')}
       <div class="card">
@@ -695,7 +718,7 @@ var RunfastShare = (function () {
     },
 
     goRecord() {
-      const s = activeSession();
+      const s = sessionCtx();
       if (s.activePlayers.length < 2) { alert('在场玩家不足 2 人，请先到「玩家管理」加人'); return; }
       go({ name: 'record', participants: s.activePlayers.slice(), winner: null, cards: Object.create(null), shutoutOff: Object.create(null), editId: null, editIndex: null });
     },
@@ -719,27 +742,26 @@ var RunfastShare = (function () {
     },
 
     saveRound() {
-      const s = activeSession();
       const losers = currentLosers();
       if (!view.winner || losers.some((l) => typeof l.cardsLeft !== 'number')) return;
-      if (view.editId) {
-        const r = s.rounds.find((x) => x.id === view.editId);
-        r.winner = view.winner;
-        r.losers = losers;
-      } else {
-        s.rounds.push({
-          id: 'r' + Date.now(),
-          at: new Date().toISOString(),
-          winner: view.winner,
-          losers,
-        });
-      }
-      saveDB();
+      const winner = view.winner;
+      const editId = view.editId;
+      const newRound = editId ? null : { id: 'r' + Date.now(), at: new Date().toISOString(), winner, losers };
+      commitSession((s) => {
+        if (editId) {
+          const r = s.rounds.find((x) => x.id === editId);
+          if (!r) return;
+          r.winner = winner;
+          r.losers = losers;
+        } else {
+          s.rounds.push(newRound);
+        }
+      });
       App.goSession();
     },
 
     editRound(rid) {
-      const s = activeSession();
+      const s = sessionCtx();
       const i = s.rounds.findIndex((x) => x.id === rid);
       const r = s.rounds[i];
       const cards = Object.create(null), shutoutOff = Object.create(null);
@@ -757,50 +779,54 @@ var RunfastShare = (function () {
 
     deleteRound(rid) {
       if (!confirm('删除后总分将重算，确定删除这一局？')) return;
-      const s = activeSession();
-      s.rounds = s.rounds.filter((x) => x.id !== rid);
-      saveDB();
-      render();
+      commitSession((s) => { s.rounds = s.rounds.filter((x) => x.id !== rid); });
     },
 
     goPlayers: () => go({ name: 'players' }),
 
     leave(name) {
-      const s = activeSession();
-      s.activePlayers = s.activePlayers.filter((n) => n !== name);
-      saveDB();
-      render();
+      commitSession((s) => { s.activePlayers = s.activePlayers.filter((n) => n !== name); });
     },
 
     comeBack(name) {
-      const s = activeSession();
+      const s = sessionCtx();
       if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      s.activePlayers.push(name);
-      saveDB();
-      render();
+      commitSession((x) => { x.activePlayers.push(name); });
     },
 
     joinPlayer() {
-      const s = activeSession();
+      const s = sessionCtx();
       const name = document.getElementById('joinName').value.trim();
       if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (s.players.includes(name)) { alert('这个名字本场已存在'); return; }
       if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      s.players.push(name);
-      s.activePlayers.push(name);
-      if (!db.playerDirectory.includes(name)) db.playerDirectory.push(name);
-      saveDB();
-      render();
+      if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
+      commitSession((x) => {
+        x.players.push(name);
+        x.activePlayers.push(name);
+      });
     },
 
     finishSession() {
-      const s = activeSession();
+      const s = sessionCtx();
       if (!s.rounds.length) { alert('还没记过任何一局，不能结束'); return; }
       if (!confirm('结束后不能再记新局，确定结束本场吗？')) return;
-      s.status = 'finished';
-      s.finishedAt = new Date().toISOString();
+      const sid = s.id;
+      commitSession((x) => {
+        x.status = 'finished';
+        x.finishedAt = new Date().toISOString();
+      });
+      if (!online.active) App.goSettle(sid, 'home');
+      // 联机模式：结束状态经云端推送回来后由 onRoom 快照并跳转（Task 5）
+    },
+
+    voidSession() {
+      if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
+      if (online.active) { App.closeRoomVoid(); return; }  // Task 5 实现；本任务前联机不可达
+      const s = activeSession();
+      db.sessions = db.sessions.filter((x) => x.id !== s.id);
       saveDB();
-      App.goSettle(s.id, 'home');
+      App.goHome();
     },
 
     goSettle: (sid, from) => go({ name: 'settle', sid, from: from || 'home' }),
