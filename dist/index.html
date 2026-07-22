@@ -582,6 +582,11 @@ var RunfastShare = (function () {
   function sessionCtx() { return online.active ? online.room.session : activeSession(); }
   async function commitSession(mutator) {
     if (online.active) {
+      if (!RunfastSync.canEdit(online.room, online.uid)) {
+        alert('房主已关闭「允许他人修改」，暂不能记分');
+        render();
+        return;
+      }
       try {
         await RunfastSync.mutate(online.code, (room) => {
           mutator(room.session);
@@ -795,7 +800,7 @@ var RunfastShare = (function () {
       <button class="btn" onclick="App.copyText('${s.id}')">📋 复制战绩文字</button>
       <div class="gap"></div>
       <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>
-      ${online.code && online.room && RunfastSync.canAdmin(online.room, online.uid) ? `<div class="gap"></div>
+      ${online.code && online.room && online.room.session && online.room.session.id === s.id && RunfastSync.canAdmin(online.room, online.uid) ? `<div class="gap"></div>
       <button class="btn" onclick="App.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
   };
 
@@ -851,7 +856,12 @@ var RunfastShare = (function () {
       await RunfastSync.signIn();
       online.uid = RunfastSync.getUid();
       const { data } = await RunfastSync.readRoom(code);
-      if (data === null) { alert('房号不存在或已关闭'); return; }
+      if (data === null) {
+        localStorage.removeItem('runfast.sync.room');
+        alert('房号不存在或已关闭');
+        render();
+        return;
+      }
       online.active = true;
       online.code = code;
       online.room = data;
@@ -861,6 +871,7 @@ var RunfastShare = (function () {
         onRoom(room) {
           online.room = room;
           if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
+          if (view.name === 'record' && !RunfastSync.canEdit(room, online.uid)) { go({ name: 'session' }); return; }
           if (['session', 'record', 'players'].includes(view.name)) render();
         },
         onStatus(s) {
@@ -894,13 +905,14 @@ var RunfastShare = (function () {
     }
     const code = online.code;
     const admin = RunfastSync.canAdmin(online.room, online.uid);
+    const room = online.room;
     RunfastSync.close();
     online.active = false;
     online.status = 'idle';
     localStorage.removeItem('runfast.sync.room');
-    // 保留 code/room 供房主关闭房间
-    online.code = code;
-    online.room = admin ? online.room : null;
+    // 仅房主保留 code/room，用于本场结算页的「关闭房间」
+    online.code = admin ? code : null;
+    online.room = admin ? room : null;
     go({ name: 'settle', sid: session.id, from: 'home' });
   }
 
@@ -995,6 +1007,7 @@ var RunfastShare = (function () {
     },
 
     async toggleAllowEdit() {
+      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以修改权限'); return; }
       try {
         await RunfastSync.mutate(online.code, (room) => {
           room.allowEdit = !room.allowEdit;
@@ -1011,6 +1024,7 @@ var RunfastShare = (function () {
     },
 
     async closeRoom() {
+      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以关闭房间'); return; }
       if (!confirm('关闭后房间从云端删除（战绩已存进各自手机历史），确定？')) return;
       try {
         await RunfastSync.deleteRoom(online.code);
@@ -1194,6 +1208,7 @@ var RunfastShare = (function () {
     finishSession() {
       const s = sessionCtx();
       if (!s.rounds.length) { alert('还没记过任何一局，不能结束'); return; }
+      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以结束本场'); return; }
       if (!confirm('结束后不能再记新局，确定结束本场吗？')) return;
       const sid = s.id;
       commitSession((x) => {
@@ -1205,8 +1220,9 @@ var RunfastShare = (function () {
     },
 
     voidSession() {
+      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以作废本场'); return; }
       if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
-      if (online.active) { App.closeRoomVoid(); return; }  // Task 5 实现；本任务前联机不可达
+      if (online.active) { App.closeRoomVoid(); return; }
       const s = activeSession();
       db.sessions = db.sessions.filter((x) => x.id !== s.id);
       saveDB();
