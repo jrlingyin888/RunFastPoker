@@ -1,0 +1,28 @@
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f3f4f6; color: #111827; }
+#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); }
+h1 { font-size: 22px; }
+.card { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 15px; font-size: 17px; font-weight: 600; background: #e5e7eb; color: #111827; cursor: pointer; }
+.btn-primary { background: #2563eb; color: #fff; }
+.btn-danger { background: #fee2e2; color: #b91c1c; }
+.btn-sm { display: inline-block; width: auto; padding: 9px 14px; font-size: 14px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 0; border-bottom: 1px solid #f3f4f6; font-size: 16px; }
+.row:last-child { border-bottom: 0; }
+.pos { color: #dc2626; font-weight: 700; }
+.neg { color: #059669; font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 10px 16px; border-radius: 999px; background: #f3f4f6; border: 1.5px solid #e5e7eb; font-size: 16px; cursor: pointer; }
+.chip.on { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; font-weight: 600; }
+.numgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.numgrid button { padding: 11px 0; border-radius: 8px; border: 1.5px solid #e5e7eb; background: #fff; font-size: 16px; cursor: pointer; }
+.numgrid button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 16px; }
+.muted { color: #6b7280; font-size: 13px; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 600; border: 0; cursor: button; }
+.topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.topbar .title { font-weight: 700; font-size: 18px; }
+.back { border: 0; background: none; font-size: 16px; color: #2563eb; padding: 4px; cursor: pointer; }
+.section-title { font-weight: 600; margin-bottom: 10px; }
+.gap { height: 10px; }

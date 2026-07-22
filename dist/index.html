@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>跑得快记分</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f3f4f6; color: #111827; }
+#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); }
+h1 { font-size: 22px; }
+.card { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.btn { display: block; width: 100%; border: 0; border-radius: 12px; padding: 15px; font-size: 17px; font-weight: 600; background: #e5e7eb; color: #111827; cursor: pointer; }
+.btn-primary { background: #2563eb; color: #fff; }
+.btn-danger { background: #fee2e2; color: #b91c1c; }
+.btn-sm { display: inline-block; width: auto; padding: 9px 14px; font-size: 14px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 0; border-bottom: 1px solid #f3f4f6; font-size: 16px; }
+.row:last-child { border-bottom: 0; }
+.pos { color: #dc2626; font-weight: 700; }
+.neg { color: #059669; font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { padding: 10px 16px; border-radius: 999px; background: #f3f4f6; border: 1.5px solid #e5e7eb; font-size: 16px; cursor: pointer; }
+.chip.on { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; font-weight: 600; }
+.numgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.numgrid button { padding: 11px 0; border-radius: 8px; border: 1.5px solid #e5e7eb; background: #fff; font-size: 16px; cursor: pointer; }
+.numgrid button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 16px; }
+.muted { color: #6b7280; font-size: 13px; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 600; border: 0; cursor: button; }
+.topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.topbar .title { font-weight: 700; font-size: 18px; }
+.back { border: 0; background: none; font-size: 16px; color: #2563eb; padding: 4px; cursor: pointer; }
+.section-title { font-weight: 600; margin-bottom: 10px; }
+.gap { height: 10px; }
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// 跑得快结算纯函数。金额一律以"分"（整数）计算。
+// 浏览器：全局 RunfastLogic；Node：module.exports（供测试）。
+var RunfastLogic = (function () {
+  'use strict';
+
+  const HAND_SIZE = 10;
+  const SHUTOUT_MULTIPLIER = 2;
+
+  // 元字符串 -> 分。非法（非数字/超两位小数/<=0）返回 NaN。
+  function yuanToFen(str) {
+    if (typeof str !== 'string' || !/^\d+(\.\d{1,2})?$/.test(str.trim())) return NaN;
+    const fen = Math.round(parseFloat(str) * 100);
+    return fen > 0 ? fen : NaN;
+  }
+
+  // 分 -> 元字符串，去多余的零：100->'1'，50->'0.5'，105->'1.05'
+  function fenToYuan(fen) {
+    const sign = fen < 0 ? '-' : '';
+    const abs = Math.abs(fen);
+    const yuan = Math.floor(abs / 100);
+    const rest = abs % 100;
+    if (rest === 0) return sign + yuan;
+    let dec = (rest < 10 ? '0' : '') + rest;
+    if (dec[1] === '0') dec = dec[0];
+    return sign + yuan + '.' + dec;
+  }
+
+  // 输家本局实际计的牌数（全关双倍）
+  function countedCards(loser) {
+    return loser.shutout ? loser.cardsLeft * SHUTOUT_MULTIPLIER : loser.cardsLeft;
+  }
+
+  // 一局的转账明细（剩 0 张不计）
+  function roundTransfers(round, priceFen) {
+    return round.losers
+      .filter((l) => l.cardsLeft > 0)
+      .map((l) => {
+        const cards = countedCards(l);
+        return { from: l.name, to: round.winner, cards, fen: cards * priceFen };
+      });
+  }
+
+  // 整场累计净额。包含 session.players 中所有人（未参局者为 0），顺序同 players。
+  function sessionNet(session) {
+    const net = Object.create(null);
+    const entry = (n) => (net[n] ||= { name: n, cards: 0, fen: 0 });
+    session.players.forEach(entry);
+    session.rounds.forEach((round) => {
+      roundTransfers(round, session.pricePerCardFen).forEach((t) => {
+        entry(t.from).cards -= t.cards; entry(t.from).fen -= t.fen;
+        entry(t.to).cards += t.cards;   entry(t.to).fen += t.fen;
+      });
+    });
+    return session.players.map((n) => net[n]);
+  }
+
+  // 最简转账：欠最多的与赢最多的贪心配对，笔数 <= 人数-1
+  function settleUp(net) {
+    const debtors = [], creditors = [];
+    net.forEach((p) => {
+      if (p.fen < 0) debtors.push({ name: p.name, fen: -p.fen });
+      else if (p.fen > 0) creditors.push({ name: p.name, fen: p.fen });
+    });
+    debtors.sort((a, b) => b.fen - a.fen);
+    creditors.sort((a, b) => b.fen - a.fen);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const pay = Math.min(debtors[i].fen, creditors[j].fen);
+      out.push({ from: debtors[i].name, to: creditors[j].name, fen: pay });
+      debtors[i].fen -= pay; creditors[j].fen -= pay;
+      if (debtors[i].fen === 0) i++;
+      if (creditors[j].fen === 0) j++;
+    }
+    return out;
+  }
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  // 战绩纯文本（复制到聊天工具）
+  function summaryText(session) {
+    const d = new Date(session.createdAt);
+    const lines = [];
+    lines.push('【跑得快战绩】' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
+    lines.push('共 ' + session.rounds.length + ' 局 · ' + fenToYuan(session.pricePerCardFen) + '元/张');
+    lines.push('— 盈亏 —');
+    sessionNet(session)
+      .slice().sort((a, b) => b.fen - a.fen)
+      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 元'));
+    const pays = settleUp(sessionNet(session));
+    if (pays.length) {
+      lines.push('— 转账 —');
+      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 元'));
+    }
+    return lines.join('\n');
+  }
+
+  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, sessionNet, settleUp, summaryText };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  return api;
+})();
+
+</script>
+<script>
+// 战绩图绘制与分享（Task 9 实现）。占位保证页面可运行。
+var RunfastShare = (function () {
+  'use strict';
+  async function share() { alert('分享功能即将上线'); }
+  const api = { share };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  return api;
+})();
+
+</script>
+<script>
+(() => {
+  'use strict';
+  document.getElementById('app').innerHTML =
+    '<h1 style="text-align:center;margin-top:40vh">🃏 跑得快记分（建设中）</h1>';
+})();
+
+</script>
+</body>
+</html>
