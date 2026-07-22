@@ -36,6 +36,19 @@
   const topbar = (title, backJs) =>
     `<div class="topbar">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div></div>`;
 
+  async function copyToClipboard(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    }
+  }
+
   // ---------- 导航与渲染 ----------
   let view = { name: 'home' };
   function go(v) { view = v; render(); window.scrollTo(0, 0); }
@@ -171,7 +184,53 @@
         ${view.editId ? '保存修改' : '✅ 确认保存'}</button>`;
   };
 
-  VIEWS.history = () => topbar('历史记录', 'App.goHome()') + '<div class="card muted">建设中</div>';
+  // ---------- 结算页（结束本场后 & 历史详情共用） ----------
+  VIEWS.settle = () => {
+    const s = db.sessions.find((x) => x.id === view.sid);
+    const backJs = view.from === 'history' ? 'App.goHistory()' : 'App.goHome()';
+    const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
+    const pays = L.settleUp(L.sessionNet(s));
+    return `
+      ${topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
+      <div class="card">
+        <div class="section-title">最终盈亏（${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张）</div>
+        ${net.map((p) => `<div class="row"><span>${esc(p.name)}</span>
+          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span></div>`).join('')}
+      </div>
+      <div class="card">
+        <div class="section-title">💸 转账方案（最少笔数）</div>
+        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 转给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
+          || '<div class="muted">全部打平，无需转账</div>'}
+      </div>
+      <button class="btn btn-primary" onclick="App.shareImage('${s.id}')">📤 分享战绩图</button>
+      <div class="gap"></div>
+      <button class="btn" onclick="App.copyText('${s.id}')">📋 复制战绩文字</button>
+      <div class="gap"></div>
+      <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>`;
+  };
+
+  // ---------- 只读局明细 ----------
+  VIEWS.rounds = () => {
+    const s = db.sessions.find((x) => x.id === view.sid);
+    return `
+      ${topbar('每局明细', `App.goSettle('${view.sid}','${view.from}')`)}
+      <div class="card">${s.rounds.map((r, i) => roundRow(s, r, i, true)).join('')
+        || '<div class="muted">本场没有记录任何一局</div>'}</div>`;
+  };
+
+  // ---------- 历史记录 ----------
+  VIEWS.history = () => {
+    const list = db.sessions.filter((s) => s.status === 'finished')
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return `
+      ${topbar('历史记录', 'App.goHome()')}
+      <div class="card">
+        ${list.map((s) => `<div class="row" onclick="App.goSettle('${s.id}','history')" style="cursor:pointer">
+          <div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(esc).join('、')}</div></div>
+          <span class="muted">${s.rounds.length} 局 ›</span>
+        </div>`).join('') || '<div class="muted">还没有打完的场</div>'}
+      </div>`;
+  };
 
   // ---------- 玩家管理 ----------
   VIEWS.players = () => {
@@ -334,7 +393,26 @@
       render();
     },
 
-    finishSession() { alert('结束本场即将上线'); }, // Task 7 实现
+    finishSession() {
+      const s = activeSession();
+      if (!s.rounds.length) { alert('还没记过任何一局，不能结束'); return; }
+      if (!confirm('结束后不能再记新局，确定结束本场吗？')) return;
+      s.status = 'finished';
+      s.finishedAt = new Date().toISOString();
+      saveDB();
+      App.goSettle(s.id, 'home');
+    },
+
+    goSettle: (sid, from) => go({ name: 'settle', sid, from: from || 'home' }),
+    goRounds: (sid, from) => go({ name: 'rounds', sid, from: from || 'home' }),
+
+    async copyText(sid) {
+      const s = db.sessions.find((x) => x.id === sid);
+      const ok = await copyToClipboard(L.summaryText(s));
+      alert(ok ? '已复制，去粘贴发给牌友吧' : '复制失败，请改用「分享战绩图」或截图');
+    },
+
+    shareImage() { alert('分享战绩图即将上线'); }, // Task 9 接线
 
     exportData() { alert('导出功能即将上线'); },  // Task 8 实现
     importData() { alert('导入功能即将上线'); },  // Task 8 实现
