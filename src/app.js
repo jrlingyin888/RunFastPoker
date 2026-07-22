@@ -173,6 +173,25 @@
 
   VIEWS.history = () => topbar('历史记录', 'App.goHome()') + '<div class="card muted">建设中</div>';
 
+  // ---------- 玩家管理 ----------
+  VIEWS.players = () => {
+    const s = activeSession();
+    return `
+      ${topbar('玩家管理', 'App.goSession()')}
+      <div class="card">
+        ${s.players.map((n) => `<div class="row"><span>${esc(n)}</span>
+          ${s.activePlayers.includes(n)
+            ? `<button class="btn btn-sm" onclick="App.leave('${esc(n)}')">标记离场</button>`
+            : `<button class="btn btn-sm" onclick="App.comeBack('${esc(n)}')">回归</button>`}
+        </div>`).join('')}
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <input type="text" id="joinName" placeholder="中途加入的玩家名字" maxlength="8">
+          <button class="btn btn-sm" onclick="App.joinPlayer()">加入</button>
+        </div>
+        <div class="muted" style="margin-top:10px">离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。</div>
+      </div>`;
+  };
+
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
@@ -260,9 +279,60 @@
       App.goSession();
     },
 
-    editRound() { alert('修改功能即将上线'); },   // Task 6 实现
-    deleteRound() { alert('删除功能即将上线'); }, // Task 6 实现
-    goPlayers() { alert('玩家管理即将上线'); },   // Task 6 实现
+    editRound(rid) {
+      const s = activeSession();
+      const i = s.rounds.findIndex((x) => x.id === rid);
+      const r = s.rounds[i];
+      const cards = {}, shutoutOff = {};
+      r.losers.forEach((l) => {
+        cards[l.name] = l.cardsLeft;
+        if (l.cardsLeft === 10 && !l.shutout) shutoutOff[l.name] = true;
+      });
+      go({
+        name: 'record',
+        participants: [r.winner, ...r.losers.map((l) => l.name)],
+        winner: r.winner, cards, shutoutOff,
+        editId: rid, editIndex: i + 1,
+      });
+    },
+
+    deleteRound(rid) {
+      if (!confirm('删除后总分将重算，确定删除这一局？')) return;
+      const s = activeSession();
+      s.rounds = s.rounds.filter((x) => x.id !== rid);
+      saveDB();
+      render();
+    },
+
+    goPlayers: () => go({ name: 'players' }),
+
+    leave(name) {
+      const s = activeSession();
+      s.activePlayers = s.activePlayers.filter((n) => n !== name);
+      saveDB();
+      render();
+    },
+
+    comeBack(name) {
+      const s = activeSession();
+      s.activePlayers.push(name);
+      saveDB();
+      render();
+    },
+
+    joinPlayer() {
+      const s = activeSession();
+      const name = document.getElementById('joinName').value.trim();
+      if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (s.players.includes(name)) { alert('这个名字本场已存在'); return; }
+      if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
+      s.players.push(name);
+      s.activePlayers.push(name);
+      if (!db.playerDirectory.includes(name)) db.playerDirectory.push(name);
+      saveDB();
+      render();
+    },
+
     finishSession() { alert('结束本场即将上线'); }, // Task 7 实现
 
     exportData() { alert('导出功能即将上线'); },  // Task 8 实现
