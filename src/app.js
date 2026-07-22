@@ -251,6 +251,20 @@
       </div>`;
   };
 
+  // ---------- 导入前校验 ----------
+  function importNamesValid(data) {
+    const names = new Set(data.playerDirectory);
+    data.sessions.forEach((s) => {
+      s.players.forEach((n) => names.add(n));
+      s.activePlayers.forEach((n) => names.add(n));
+      s.rounds.forEach((r) => {
+        names.add(r.winner);
+        r.losers.forEach((l) => names.add(l.name));
+      });
+    });
+    return Array.from(names).every((n) => validName(n));
+  }
+
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
@@ -414,8 +428,45 @@
 
     shareImage() { alert('分享战绩图即将上线'); }, // Task 9 接线
 
-    exportData() { alert('导出功能即将上线'); },  // Task 8 实现
-    importData() { alert('导入功能即将上线'); },  // Task 8 实现
+    exportData() {
+      const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'runfast-backup-' + fmtDate(new Date().toISOString()) + '.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    },
+
+    importData() {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = '.json,application/json';
+      inp.style.display = 'none';
+      document.body.appendChild(inp);
+      inp.onchange = () => {
+        const f = inp.files[0];
+        if (!f) { inp.remove(); return; }
+        const r = new FileReader();
+        r.onload = () => {
+          try {
+            const data = JSON.parse(r.result);
+            if (data.version !== 1 || !Array.isArray(data.sessions) || !Array.isArray(data.playerDirectory)) {
+              throw new Error('bad format');
+            }
+            if (!importNamesValid(data)) throw new Error('bad format');
+            if (!confirm('导入将覆盖本手机上现有的全部记分数据，确定？')) return;
+            db = data;
+            saveDB();
+            go({ name: 'home' });
+            alert('导入成功');
+          } catch (e) { alert('文件格式不对，导入失败'); }
+          finally { inp.remove(); }
+        };
+        r.readAsText(f);
+      };
+      inp.click();
+    },
   };
   window.App = App;
 
