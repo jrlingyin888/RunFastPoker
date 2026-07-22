@@ -85,8 +85,92 @@
       <button class="btn btn-primary" onclick="App.startSession()">开始记分</button>`;
   };
 
-  // 其余视图占位（后续任务实现）
-  VIEWS.session = () => topbar('记分主页', 'App.goHome()') + '<div class="card muted">建设中</div>';
+  // ---------- 记分主页 ----------
+  function roundRow(s, r, i, readonly) {
+    const detail = L.roundTransfers(r, s.pricePerCardFen)
+      .map((t) => `${esc(t.from)} ${t.cards}张`).join('，');
+    return `<div class="row">
+      <div><b>第${i + 1}局</b> ${esc(r.winner)} 赢
+        <div class="muted">${detail || '其他人也都出完了'}</div></div>
+      ${readonly ? '' : `<div style="flex-shrink:0">
+        <button class="btn btn-sm" onclick="App.editRound('${r.id}')">改</button>
+        <button class="btn btn-sm" onclick="App.deleteRound('${r.id}')">删</button></div>`}
+    </div>`;
+  }
+
+  VIEWS.session = () => {
+    const s = activeSession();
+    if (!s) return VIEWS.home();
+    const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
+    return `
+      ${topbar(`已记 ${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张`, 'App.goHome()')}
+      <div class="card">
+        ${net.map((p) => `<div class="row">
+          <span>${esc(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
+        </div>`).join('')}
+      </div>
+      <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button class="btn" onclick="App.goPlayers()">玩家管理</button>
+        <button class="btn btn-danger" onclick="App.finishSession()">结束本场</button>
+      </div>
+      <div class="card" style="margin-top:12px">
+        ${s.rounds.map((r, i) => roundRow(s, r, i, false)).join('')
+          || '<div class="muted">还没有记录，点上面「记一局」开始</div>'}
+      </div>`;
+  };
+
+  // ---------- 记一局 ----------
+  function currentLosers() {
+    return view.participants
+      .filter((n) => n !== view.winner)
+      .map((n) => ({
+        name: n,
+        cardsLeft: view.cards[n],
+        shutout: view.cards[n] === 10 && !view.shutoutOff[n],
+      }));
+  }
+
+  VIEWS.record = () => {
+    const s = activeSession();
+    const ps = view.participants;
+    const w = view.winner;
+    const losers = ps.filter((n) => n !== w);
+    const ready = w && losers.every((n) => view.cards[n] !== undefined);
+    let previewHtml = '';
+    if (ready) {
+      const ts = L.roundTransfers({ winner: w, losers: currentLosers() }, s.pricePerCardFen);
+      previewHtml = `<div class="card"><div class="section-title">本局结算预览</div>
+        ${ts.map((t) => `<div class="row"><span>${esc(t.from)} → ${esc(t.to)}</span><span>${t.cards} 张 · ${yuan(t.fen)} 元</span></div>`).join('')
+          || '<div class="muted">其他人都 0 张，本局无转账</div>'}</div>`;
+    }
+    return `
+      ${topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.goSession()')}
+      <div class="card">
+        <div class="section-title">1️⃣ 谁赢了？</div>
+        <div class="chips">${ps.map((n) =>
+          `<button class="chip ${w === n ? 'on' : ''}" onclick="App.pickWinner('${esc(n)}')">${esc(n)}</button>`).join('')}</div>
+      </div>
+      ${w ? losers.map((n) => {
+        const v = view.cards[n];
+        const shutBadge =
+          v === 10 && !view.shutoutOff[n]
+            ? `<button class="badge" onclick="App.toggleShutout('${esc(n)}')">全关 ×2（点此取消）</button>`
+            : v === 10
+              ? `<button class="badge" style="background:#e5e7eb;color:#374151" onclick="App.toggleShutout('${esc(n)}')">全关已取消（点此恢复）</button>`
+              : '';
+        return `<div class="card">
+          <div class="section-title">${esc(n)} 剩几张？ ${shutBadge}</div>
+          <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
+            `<button class="${v === k ? 'on' : ''}" onclick="App.pickCards('${esc(n)}',${k})">${k}</button>`).join('')}</div>
+        </div>`;
+      }).join('') : ''}
+      ${previewHtml}
+      <button class="btn btn-primary" ${ready ? '' : 'disabled style="opacity:.4"'} onclick="App.saveRound()">
+        ${view.editId ? '保存修改' : '✅ 确认保存'}</button>`;
+  };
+
   VIEWS.history = () => topbar('历史记录', 'App.goHome()') + '<div class="card muted">建设中</div>';
 
   // ---------- 交互 ----------
@@ -131,6 +215,55 @@
       saveDB();
       App.goSession();
     },
+
+    goRecord() {
+      const s = activeSession();
+      if (s.activePlayers.length < 2) { alert('在场玩家不足 2 人，请先到「玩家管理」加人'); return; }
+      go({ name: 'record', participants: s.activePlayers.slice(), winner: null, cards: {}, shutoutOff: {}, editId: null, editIndex: null });
+    },
+
+    pickWinner(name) {
+      view.winner = name;
+      delete view.cards[name]; // 赢家固定 0 张
+      render();
+    },
+
+    pickCards(name, k) {
+      view.cards[name] = k;
+      delete view.shutoutOff[name]; // 改牌数后全关标记回到自动状态
+      render();
+    },
+
+    toggleShutout(name) {
+      if (view.shutoutOff[name]) delete view.shutoutOff[name];
+      else view.shutoutOff[name] = true;
+      render();
+    },
+
+    saveRound() {
+      const s = activeSession();
+      const losers = currentLosers();
+      if (!view.winner || losers.some((l) => typeof l.cardsLeft !== 'number')) return;
+      if (view.editId) {
+        const r = s.rounds.find((x) => x.id === view.editId);
+        r.winner = view.winner;
+        r.losers = losers;
+      } else {
+        s.rounds.push({
+          id: 'r' + Date.now(),
+          at: new Date().toISOString(),
+          winner: view.winner,
+          losers,
+        });
+      }
+      saveDB();
+      App.goSession();
+    },
+
+    editRound() { alert('修改功能即将上线'); },   // Task 6 实现
+    deleteRound() { alert('删除功能即将上线'); }, // Task 6 实现
+    goPlayers() { alert('玩家管理即将上线'); },   // Task 6 实现
+    finishSession() { alert('结束本场即将上线'); }, // Task 7 实现
 
     exportData() { alert('导出功能即将上线'); },  // Task 8 实现
     importData() { alert('导入功能即将上线'); },  // Task 8 实现
