@@ -38,6 +38,31 @@
     return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
   };
   const activeSession = () => db.sessions.find((s) => s.status === 'active') || null;
+
+  // ---------- 联机状态（Task 5 接线；本地模式恒 inactive） ----------
+  const online = { active: false, code: null, room: null, status: 'idle', uid: null };
+  function sessionCtx() { return online.active ? online.room.session : activeSession(); }
+  async function commitSession(mutator) {
+    if (online.active) {
+      if (!RunfastSync.canEdit(online.room, online.uid)) {
+        alert('房主已关闭「允许他人修改」，暂不能记分');
+        render();
+        return;
+      }
+      try {
+        await RunfastSync.mutate(online.code, (room) => {
+          mutator(room.session);
+          room.updatedAt = Date.now();
+          return room;
+        });
+      } catch (e) { alert('同步失败，请检查网络后重试'); }
+    } else {
+      mutator(activeSession());
+      saveDB();
+      render();
+    }
+  }
+
   const topbar = (title, backJs) =>
     `<div class="topbar">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div></div>`;
 
@@ -63,11 +88,19 @@
   // ---------- 首页 ----------
   VIEWS.home = () => {
     const act = activeSession();
+    let lastRoom = null;
+    try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
+      ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act
         ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button>`
-        : `<button class="btn btn-primary" onclick="App.goSetup()">开新一场</button>`}
+        : `<button class="btn btn-primary" onclick="App.goSetup()">开新一场（本地）</button>`}
+      <div class="gap"></div>
+      <div style="display:flex;gap:10px">
+        <button class="btn" onclick="App.goOnlineSetup()">创建联机场</button>
+        <button class="btn" onclick="App.goJoinRoom()">加入联机场</button>
+      </div>
       <div class="gap"></div>
       <button class="btn" onclick="App.goHistory()">历史记录</button>
       <div class="gap"></div>
@@ -128,25 +161,31 @@
   }
 
   VIEWS.session = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     if (!s) return VIEWS.home();
+    const editable = !online.active || RunfastSync.canEdit(online.room, online.uid);
+    const admin = !online.active || (online.room && RunfastSync.canAdmin(online.room, online.uid));
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     return `
-      ${topbar(`已记 ${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张`, 'App.goHome()')}
+      ${topbar(`已记 ${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张`, online.active ? '' : 'App.goHome()')}
+      ${syncBar()}
       <div class="card">
         ${net.map((p) => `<div class="row">
           <span>${esc(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
           <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
         </div>`).join('')}
       </div>
-      <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
-      <div style="display:flex;gap:10px;margin-top:10px">
+      ${editable ? `<button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>` : '<div class="muted" style="text-align:center;margin:6px 0">👀 观战中——房主开启「允许他人修改」后你才能记分</div>'}
+      ${editable ? `<div style="display:flex;gap:10px;margin-top:10px">
         <button class="btn" onclick="App.goPlayers()">玩家管理</button>
+        ${admin ? `<button class="btn" onclick="App.voidSession()">作废本场</button>` : ''}
+      </div>` : ''}
+      ${admin ? `<div style="margin-top:10px">
         <button class="btn btn-danger" onclick="App.finishSession()">结束本场</button>
-      </div>
+      </div>` : ''}
       <div class="card" style="margin-top:12px">
-        ${s.rounds.map((r, i) => roundRow(s, r, i, false)).join('')
-          || '<div class="muted">还没有记录，点上面「记一局」开始</div>'}
+        ${s.rounds.map((r, i) => roundRow(s, r, i, !editable)).join('')
+          || '<div class="muted">还没有记录' + (editable ? '，点上面「记一局」开始' : '') + '</div>'}
       </div>`;
   };
 
@@ -162,7 +201,7 @@
   }
 
   VIEWS.record = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     const ps = view.participants;
     const w = view.winner;
     const losers = ps.filter((n) => n !== w);
@@ -222,7 +261,9 @@
       <div class="gap"></div>
       <button class="btn" onclick="App.copyText('${s.id}')">📋 复制战绩文字</button>
       <div class="gap"></div>
-      <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>`;
+      <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>
+      ${online.code && online.room && online.room.session && online.room.session.id === s.id && RunfastSync.canAdmin(online.room, online.uid) ? `<div class="gap"></div>
+      <button class="btn" onclick="App.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
   };
 
   // ---------- 只读局明细 ----------
@@ -248,9 +289,101 @@
       </div>`;
   };
 
+  // ---------- 联机 ----------
+  VIEWS.joinRoom = () => `
+    ${topbar('加入联机场', 'App.goHome()')}
+    <div class="card">
+      <div class="section-title">输入 6 位房号</div>
+      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159">
+      <div class="gap"></div>
+      <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
+      <div class="muted" style="margin-top:10px">房号问房主要，或直接点房主发到群里的链接。</div>
+    </div>`;
+
+  function syncBar() {
+    if (!online.active) return '';
+    const admin = RunfastSync.canAdmin(online.room, online.uid);
+    return `<div class="sync-bar">
+      <span><span class="sync-dot ${online.status === 'connected' ? '' : 'off'}"></span>房号 ${esc(online.code)} · ${online.status === 'connected' ? '已连接' : '连接中…'}</span>
+      <span>
+        ${admin ? `<button class="btn btn-sm" onclick="App.toggleAllowEdit()">${online.room.allowEdit ? '✅ 允许他人修改' : '🔒 仅房主可改'}</button>` : ''}
+        <button class="btn btn-sm" onclick="App.invite()">邀请</button>
+        <button class="btn btn-sm" onclick="App.leaveRoom()">退出</button>
+      </span>
+    </div>`;
+  }
+
+  async function enterRoom(code) {
+    try {
+      await RunfastSync.signIn();
+      online.uid = RunfastSync.getUid();
+      const { data } = await RunfastSync.readRoom(code);
+      if (data === null) {
+        // 只有失败的房号就是本机保存的那个时才清掉，避免误删仍有效的“回到联机房间”
+        let saved = null;
+        try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
+        if (saved && saved.code === code) localStorage.removeItem('runfast.sync.room');
+        alert('房号不存在或已关闭');
+        render();
+        return;
+      }
+      online.active = true;
+      online.code = code;
+      online.room = data;
+      online.status = 'connecting';
+      localStorage.setItem('runfast.sync.room', JSON.stringify({ code }));
+      await RunfastSync.subscribe(code, {
+        onRoom(room) {
+          online.room = room;
+          if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
+          if (view.name === 'record' && !RunfastSync.canEdit(room, online.uid)) { go({ name: 'session' }); return; }
+          if (['session', 'record', 'players'].includes(view.name)) render();
+        },
+        onStatus(s) {
+          online.status = s;
+          if (['session', 'players'].includes(view.name)) render();
+        },
+        onDeleted() {
+          const wasAdmin = RunfastSync.canAdmin(online.room, online.uid);
+          leaveOnline();
+          if (!wasAdmin) alert('房间已被房主关闭');
+          go({ name: 'home' });
+        },
+      });
+      go({ name: 'session' });
+    } catch (e) { alert('进入房间失败：' + e.message); }
+  }
+
+  function leaveOnline() {
+    RunfastSync.close();
+    online.active = false;
+    online.code = null;
+    online.room = null;
+    online.status = 'idle';
+    localStorage.removeItem('runfast.sync.room');
+  }
+
+  function snapshotOnlineFinished(session) {
+    if (!db.sessions.some((x) => x.id === session.id)) {
+      db.sessions.push(JSON.parse(JSON.stringify(session)));
+      saveDB();
+    }
+    const code = online.code;
+    const admin = RunfastSync.canAdmin(online.room, online.uid);
+    const room = online.room;
+    RunfastSync.close();
+    online.active = false;
+    online.status = 'idle';
+    localStorage.removeItem('runfast.sync.room');
+    // 仅房主保留 code/room，用于本场结算页的「关闭房间」
+    online.code = admin ? code : null;
+    online.room = admin ? room : null;
+    go({ name: 'settle', sid: session.id, from: 'home' });
+  }
+
   // ---------- 玩家管理 ----------
   VIEWS.players = () => {
-    const s = activeSession();
+    const s = sessionCtx();
     return `
       ${topbar('玩家管理', 'App.goSession()')}
       <div class="card">
@@ -308,6 +441,75 @@
     goSession: () => go({ name: 'session' }),
     goHistory: () => go({ name: 'history' }),
 
+    goOnlineSetup() {
+      if (!RunfastSync.configured()) { alert('联机功能尚未配置，请先完成 Firebase 配置'); return; }
+      if (activeSession()) { alert('本地还有一场没打完，请先结束或作废它'); return; }
+      go({ name: 'setup', sel: [], price: '1', manage: false, mode: 'online' });
+    },
+
+    goJoinRoom() {
+      if (!RunfastSync.configured()) { alert('联机功能尚未配置，请先完成 Firebase 配置'); return; }
+      go({ name: 'joinRoom' });
+    },
+
+    joinRoomSubmit() {
+      const code = document.getElementById('roomCode').value.trim();
+      if (!RunfastSync.validRoomCode(code)) { alert('房号是 6 位数字'); return; }
+      enterRoom(code);
+    },
+
+    rejoinRoom() {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
+      if (saved && RunfastSync.validRoomCode(saved.code)) enterRoom(saved.code);
+      else { localStorage.removeItem('runfast.sync.room'); render(); }
+    },
+
+    leaveRoom() {
+      if (!confirm('退出房间？（随时可用房号再进来）')) return;
+      const code = online.code;
+      leaveOnline();
+      // 主动退出保留房号，首页「回到联机房间」可一键回来；结束/被关房的清除逻辑不受影响
+      try { localStorage.setItem('runfast.sync.room', JSON.stringify({ code })); } catch (e) { /* 忽略 */ }
+      App.goHome();
+    },
+
+    async toggleAllowEdit() {
+      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以修改权限'); return; }
+      try {
+        await RunfastSync.mutate(online.code, (room) => {
+          room.allowEdit = !room.allowEdit;
+          room.updatedAt = Date.now();
+          return room;
+        });
+      } catch (e) { alert('操作失败：' + e.message); }
+    },
+
+    async invite() {
+      const link = location.origin + location.pathname + '?room=' + online.code;
+      const ok = await copyToClipboard('来跑得快记分房间围观/记分：' + link + '（房号 ' + online.code + '）');
+      alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + online.code);
+    },
+
+    async closeRoom() {
+      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以关闭房间'); return; }
+      if (!confirm('关闭后房间从云端删除（战绩已存进各自手机历史），确定？')) return;
+      try {
+        await RunfastSync.deleteRoom(online.code);
+        online.code = null; online.room = null;
+        render();
+      } catch (e) { alert('关闭失败：' + e.message); }
+    },
+
+    async closeRoomVoid() {
+      try {
+        const code = online.code;
+        leaveOnline();
+        await RunfastSync.deleteRoom(code);
+        App.goHome();
+      } catch (e) { alert('作废失败：' + e.message); }
+    },
+
     togglePlayer(name) {
       view.price = document.getElementById('price').value; // 保留已输入的单价
       const i = view.sel.indexOf(name);
@@ -355,12 +557,11 @@
       render();
     },
 
-    startSession() {
-      if (activeSession()) { App.goSession(); return; }
+    async startSession() {
       const priceFen = L.yuanToFen(document.getElementById('price').value.trim());
       if (view.sel.length < 2 || view.sel.length > 8) { alert('请选择 2～8 名玩家'); return; }
       if (Number.isNaN(priceFen)) { alert('单价格式不对，例：1 或 0.5'); return; }
-      db.sessions.push({
+      const session = {
         id: 's' + Date.now(),
         createdAt: new Date().toISOString(),
         pricePerCardFen: priceFen,
@@ -368,13 +569,22 @@
         activePlayers: view.sel.slice(),
         status: 'active',
         rounds: [],
-      });
+      };
+      if (view.mode === 'online') {
+        try {
+          const code = await RunfastSync.createRoom(session);
+          await enterRoom(code);
+        } catch (e) { alert('建房失败：' + e.message); }
+        return;
+      }
+      if (activeSession()) { App.goSession(); return; }
+      db.sessions.push(session);
       saveDB();
       App.goSession();
     },
 
     goRecord() {
-      const s = activeSession();
+      const s = sessionCtx();
       if (s.activePlayers.length < 2) { alert('在场玩家不足 2 人，请先到「玩家管理」加人'); return; }
       go({ name: 'record', participants: s.activePlayers.slice(), winner: null, cards: Object.create(null), shutoutOff: Object.create(null), editId: null, editIndex: null });
     },
@@ -398,27 +608,26 @@
     },
 
     saveRound() {
-      const s = activeSession();
       const losers = currentLosers();
       if (!view.winner || losers.some((l) => typeof l.cardsLeft !== 'number')) return;
-      if (view.editId) {
-        const r = s.rounds.find((x) => x.id === view.editId);
-        r.winner = view.winner;
-        r.losers = losers;
-      } else {
-        s.rounds.push({
-          id: 'r' + Date.now(),
-          at: new Date().toISOString(),
-          winner: view.winner,
-          losers,
-        });
-      }
-      saveDB();
+      const winner = view.winner;
+      const editId = view.editId;
+      const newRound = editId ? null : { id: 'r' + Date.now(), at: new Date().toISOString(), winner, losers };
+      commitSession((s) => {
+        if (editId) {
+          const r = s.rounds.find((x) => x.id === editId);
+          if (!r) return;
+          r.winner = winner;
+          r.losers = losers;
+        } else {
+          s.rounds.push(newRound);
+        }
+      });
       App.goSession();
     },
 
     editRound(rid) {
-      const s = activeSession();
+      const s = sessionCtx();
       const i = s.rounds.findIndex((x) => x.id === rid);
       const r = s.rounds[i];
       const cards = Object.create(null), shutoutOff = Object.create(null);
@@ -436,50 +645,56 @@
 
     deleteRound(rid) {
       if (!confirm('删除后总分将重算，确定删除这一局？')) return;
-      const s = activeSession();
-      s.rounds = s.rounds.filter((x) => x.id !== rid);
-      saveDB();
-      render();
+      commitSession((s) => { s.rounds = s.rounds.filter((x) => x.id !== rid); });
     },
 
     goPlayers: () => go({ name: 'players' }),
 
     leave(name) {
-      const s = activeSession();
-      s.activePlayers = s.activePlayers.filter((n) => n !== name);
-      saveDB();
-      render();
+      commitSession((s) => { s.activePlayers = s.activePlayers.filter((n) => n !== name); });
     },
 
     comeBack(name) {
-      const s = activeSession();
+      const s = sessionCtx();
       if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      s.activePlayers.push(name);
-      saveDB();
-      render();
+      commitSession((x) => { x.activePlayers.push(name); });
     },
 
     joinPlayer() {
-      const s = activeSession();
+      const s = sessionCtx();
       const name = document.getElementById('joinName').value.trim();
       if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (s.players.includes(name)) { alert('这个名字本场已存在'); return; }
       if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      s.players.push(name);
-      s.activePlayers.push(name);
-      if (!db.playerDirectory.includes(name)) db.playerDirectory.push(name);
-      saveDB();
-      render();
+      if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
+      commitSession((x) => {
+        x.players.push(name);
+        x.activePlayers.push(name);
+      });
     },
 
     finishSession() {
-      const s = activeSession();
+      const s = sessionCtx();
       if (!s.rounds.length) { alert('还没记过任何一局，不能结束'); return; }
+      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以结束本场'); return; }
       if (!confirm('结束后不能再记新局，确定结束本场吗？')) return;
-      s.status = 'finished';
-      s.finishedAt = new Date().toISOString();
+      const sid = s.id;
+      commitSession((x) => {
+        x.status = 'finished';
+        x.finishedAt = new Date().toISOString();
+      });
+      if (!online.active) App.goSettle(sid, 'home');
+      // 联机模式：结束状态经云端推送回来后由 onRoom 快照并跳转（Task 5）
+    },
+
+    voidSession() {
+      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以作废本场'); return; }
+      if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
+      if (online.active) { App.closeRoomVoid(); return; }
+      const s = activeSession();
+      db.sessions = db.sessions.filter((x) => x.id !== s.id);
       saveDB();
-      App.goSettle(s.id, 'home');
+      App.goHome();
     },
 
     goSettle: (sid, from) => go({ name: 'settle', sid, from: from || 'home' }),
@@ -537,6 +752,9 @@
     },
   };
   window.App = App;
+
+  const roomParam = location.search.match(/[?&]room=([0-9]{6})\b/);
+  if (roomParam && RunfastSync.configured()) enterRoom(roomParam[1]);
 
   render();
 })();

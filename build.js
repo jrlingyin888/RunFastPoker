@@ -6,7 +6,7 @@ const read = (p) => fs.readFileSync(path.join(__dirname, 'src', p), 'utf8');
 let html = read('index.html');
 html = html.replace('<link rel="stylesheet" href="style.css">',
   () => '<style>\n' + read('style.css') + '\n</style>');
-for (const js of ['logic.js', 'share-card.js', 'app.js']) {
+for (const js of ['logic.js', 'sync.js', 'share-card.js', 'app.js']) {
   html = html.replace(`<script src="${js}"></script>`,
     () => '<script>\n' + read(js) + '\n</script>');
 }
