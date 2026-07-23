@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createRunfastServer, canWrite, injectHostFlag } = require('../server.js');
+const { createRunfastServer, canWrite, injectHostFlag, setPath, canPatch } = require('../server.js');
 
 let seq = 0;
 function tmpData() { return path.join(os.tmpdir(), 'runfast-test-' + process.pid + '-' + (seq++) + '.json'); }
@@ -152,5 +152,48 @@ test('静态：/ 注入主机标志；/host 含本机地址与内联二维码；
     const s = JSON.parse(r.body);
     assert.equal(typeof s.clients, 'number');
     assert.equal(typeof s.rooms, 'number');
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('setPath：按路径深设，支持数组下标与删除', () => {
+  const r = { seats: [{ name: 'A', claimedBy: null }], draft: { winner: 1, entries: {} } };
+  assert.equal(setPath(r, '/seats/0/claimedBy', 'd1').seats[0].claimedBy, 'd1');
+  assert.deepEqual(setPath(r, '/draft/entries/1', { cardsLeft: 3 }).draft.entries[1], { cardsLeft: 3 });
+  assert.ok(!('winner' in setPath(r, '/draft/winner', null).draft));
+  assert.equal(setPath(r, '/', null), null);
+  assert.equal(r.seats[0].claimedBy, null); // 不改原对象
+});
+
+test('canPatch：抢空座CAS / 填自己格 / 定赢家 / 房主专属', () => {
+  const lobby = { creatorUid: 'boss', phase: 'lobby',
+    seats: [{ name: 'A', claimedBy: 'boss' }, { name: 'B', claimedBy: null }], draft: null };
+  assert.ok(canPatch(lobby, '/seats/1/claimedBy', 'x', 'x'));      // 抢空座
+  assert.ok(!canPatch(lobby, '/seats/0/claimedBy', 'x', 'x'));     // 占用的座抢不到
+  assert.ok(canPatch(lobby, '/seats/0/claimedBy', null, 'boss'));  // 房主可释放任意座
+  assert.ok(!canPatch(lobby, '/seats/0/claimedBy', null, 'x'));    // 他人不能释放别人的座
+  const playing = { creatorUid: 'boss', phase: 'playing',
+    seats: [{ name: 'A', claimedBy: 'boss' }, { name: 'B', claimedBy: 'x' }], draft: { winner: null, entries: {} } };
+  assert.ok(canPatch(playing, '/draft/entries/1', { cardsLeft: 3 }, 'x'));    // 填自己格
+  assert.ok(!canPatch(playing, '/draft/entries/1', { cardsLeft: 3 }, 'y'));   // 非本座非房主
+  assert.ok(canPatch(playing, '/draft/entries/1', { cardsLeft: 3 }, 'boss')); // 房主代填
+  assert.ok(canPatch(playing, '/draft/winner', 0, 'x'));           // 持座者可定赢家
+  assert.ok(!canPatch(playing, '/draft/winner', 0, 'z'));          // 观战者不行
+  assert.ok(canPatch(playing, '/phase', 'finished', 'boss'));      // 房主
+  assert.ok(!canPatch(playing, '/phase', 'finished', 'x'));        // 非房主
+});
+
+test('PATCH 集成：抢座成功、后到者越权被拒', async () => {
+  const df = tmpData(); const server = createRunfastServer({ dataFile: df }); const port = await listen(server);
+  try {
+    const room = { creatorUid: 'boss', phase: 'lobby',
+      seats: [{ name: 'A', claimedBy: null }, { name: 'B', claimedBy: null }], draft: null,
+      session: { id: 's1', players: ['A', 'B'], activePlayers: ['A', 'B'], rounds: [] } };
+    await req(port, 'PUT', '/rooms/300400', room, { 'X-Device-Id': 'boss' });
+    let r = await req(port, 'PATCH', '/rooms/300400', { path: '/seats/0/claimedBy', value: 'x' }, { 'X-Device-Id': 'x' });
+    assert.equal(r.status, 200);
+    r = await req(port, 'GET', '/rooms/300400');
+    assert.equal(JSON.parse(r.body).seats[0].claimedBy, 'x');
+    r = await req(port, 'PATCH', '/rooms/300400', { path: '/seats/0/claimedBy', value: 'y' }, { 'X-Device-Id': 'y' });
+    assert.equal(r.status, 403);
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });

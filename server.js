@@ -89,6 +89,44 @@ function canWrite(old, neu, me) {
     neu.creatorUid === old.creatorUid && neu.allowEdit === old.allowEdit;
 }
 
+// 按路径深设：'/a/b/2/c' → 设 obj.a.b[2].c=value（value 为 null 删该键）。返回新对象，不改原对象。
+function setPath(obj, path, value) {
+  if (!path || path === '/') return value;
+  const keys = path.replace(/^\//, '').split('/');
+  const next = obj ? JSON.parse(JSON.stringify(obj)) : {};
+  let node = next;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (node[keys[i]] == null) node[keys[i]] = {};
+    node = node[keys[i]];
+  }
+  const last = keys[keys.length - 1];
+  if (value === null) delete node[last];
+  else node[last] = value;
+  return next;
+}
+
+// 字段级写权限（服务器强制）。me=X-Device-Id。
+function canPatch(old, path, value, me) {
+  if (!me || !old) return false;                       // 房间须已存在（建房走 PUT）
+  const isCreator = old.creatorUid === me;
+  const seats = Array.isArray(old.seats) ? old.seats : [];
+  const holdsSeat = seats.some((s) => s && s.claimedBy === me);
+  const m = path.match(/^\/seats\/(\d+)\/claimedBy$/);
+  if (m) {
+    const seat = seats[Number(m[1])];
+    if (!seat) return false;
+    if (value === me && seat.claimedBy == null) return true;                 // 抢空座(CAS)
+    if (value == null && (isCreator || seat.claimedBy === me)) return true;  // 释放(房主或本人)
+    return false;
+  }
+  if (/^\/draft\/entries\/\d+$/.test(path)) {                                // 填某座那格
+    const seat = seats[Number(path.split('/').pop())];
+    return !!seat && (seat.claimedBy === me || isCreator);
+  }
+  if (path === '/draft/winner' || path === '/draft') return holdsSeat || isCreator; // 定赢家/清草稿
+  return isCreator;                                                          // phase/seats结构/session 等仅房主
+}
+
 // ---------- 服务器工厂（每实例独立房间与数据文件，便于测试隔离）----------
 function createRunfastServer(options = {}) {
   const dataFile = options.dataFile || path.join(ROOT, 'server-data.json');
@@ -193,6 +231,17 @@ function createRunfastServer(options = {}) {
         json(res, 200, { ok: true });
         return;
       }
+      if (!isEvents && req.method === 'PATCH') {
+        const me = req.headers['x-device-id'];
+        let payload;
+        try { payload = JSON.parse(await readBody(req)); } catch (e) { json(res, 400, { error: 'bad json' }); return; }
+        const old = rooms[code] || null;
+        if (!canPatch(old, payload.path, payload.value, me)) { json(res, 403, { error: 'forbidden' }); return; }
+        rooms[code] = setPath(old, payload.path, payload.value);
+        scheduleSave(); broadcast(code);
+        json(res, 200, { ok: true });
+        return;
+      }
       if (!isEvents && req.method === 'DELETE') {
         const me = req.headers['x-device-id'];
         const old = rooms[code] || null;
@@ -244,4 +293,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRunfastServer, canWrite, lanIP, lanURL, qrSvg, injectHostFlag };
+module.exports = { createRunfastServer, canWrite, canPatch, setPath, lanIP, lanURL, qrSvg, injectHostFlag };
