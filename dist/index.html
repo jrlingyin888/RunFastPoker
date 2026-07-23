@@ -882,6 +882,29 @@ var RunfastShare = (function () {
       <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
     </div>`;
 
+  VIEWS.lobby = () => {
+    const seats = seatsOf();
+    const s = online.room.session;
+    const mine = new Set(mySeatIdx());
+    const owner = isOwner();
+    return `
+      ${topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '')}
+      ${onlineBar()}
+      <div class="card">
+        <div class="section-title">选个座位（点灰色名字入座；没带手机的人可由你替 TA 入座）</div>
+        <div class="chips">
+          ${seats.map((seat, i) => seat.claimedBy
+            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${esc(seat.name)}${mine.has(i) ? '（我，点退座）' : ' ✓'}</button>`
+            : `<button class="chip" onclick="App.claimSeat(${i})">${esc(seat.name)}</button>`).join('')}
+        </div>
+        <div class="muted" style="margin-top:10px">灰色=空位，高亮=已入座。所有座位坐满后房主才能开始。</div>
+      </div>
+      ${owner
+        ? `<button class="btn btn-primary" ${allClaimed() ? '' : 'disabled style="opacity:.4"'} onclick="App.startPlaying()">
+             ${allClaimed() ? '开始记分' : '等所有人入座…'}</button>`
+        : `<div class="muted" style="text-align:center;margin:10px 0">等房主开始…先选好你的座位</div>`}`;
+  };
+
   function syncBar() {
     if (!online.active) return '';
     const admin = RunfastSync.canAdmin(online.room, online.uid);
@@ -889,6 +912,20 @@ var RunfastShare = (function () {
       <span><span class="sync-dot ${online.status === 'connected' ? '' : 'off'}"></span>房号 ${esc(online.code)} · ${online.status === 'connected' ? '已连接' : '连接中…'}</span>
       <span>
         ${admin ? `<button class="btn btn-sm" onclick="App.toggleAllowEdit()">${online.room.allowEdit ? '✅ 允许他人修改' : '🔒 仅房主可改'}</button>` : ''}
+        <button class="btn btn-sm" onclick="App.invite()">邀请</button>
+        <button class="btn btn-sm" onclick="App.leaveRoom()">退出</button>
+      </span>
+    </div>`;
+  }
+
+  function onlineBar() {
+    if (!online.active) return '';
+    const playing = RunfastSync.playingCount(seatsOf());
+    const watching = RunfastSync.observerCount(online.presence, seatsOf());
+    const dot = online.status === 'connected' ? '' : 'off';
+    return `<div class="sync-bar">
+      <span><span class="sync-dot ${dot}"></span>房号 ${esc(online.code)} · ${playing} 人在玩 · ${watching} 人观战</span>
+      <span>
         <button class="btn btn-sm" onclick="App.invite()">邀请</button>
         <button class="btn btn-sm" onclick="App.leaveRoom()">退出</button>
       </span>
@@ -1052,6 +1089,21 @@ var RunfastShare = (function () {
       const code = document.getElementById('roomCode').value.trim();
       if (!RunfastSync.validRoomCode(code)) { alert('房号是 6 位数字'); return; }
       enterRoom(code);
+    },
+
+    async claimSeat(i) {
+      try { await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', online.uid); }
+      catch (e) { alert(e.message); } // 403 = 座位已被占，onRoom 会刷新成最新
+    },
+    async releaseSeat(i) {
+      try { await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', null); }
+      catch (e) { alert(e.message); }
+    },
+    async startPlaying() {
+      if (!isOwner()) { alert('只有房主可以开始'); return; }
+      if (!allClaimed()) { alert('还有空座，等大家都入座再开始'); return; }
+      try { await RunfastSync.patch(online.code, '/phase', 'playing'); }
+      catch (e) { alert('开始失败：' + e.message); }
     },
 
     rejoinRoom() {
