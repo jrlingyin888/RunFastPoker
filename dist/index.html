@@ -315,7 +315,14 @@ var RunfastSync = (function () {
       const code = genRoomCode();
       const { data } = await readRoom(code);
       if (data !== null) continue; // 房号被占用，换一个
-      const room = { creatorUid: deviceId, allowEdit: false, updatedAt: Date.now(), session };
+      const room = {
+        creatorUid: deviceId,
+        phase: 'lobby',
+        seats: session.players.map((n) => ({ name: n, claimedBy: null })),
+        draft: null,
+        updatedAt: Date.now(),
+        session,
+      };
       await writeRoom(code, room);
       return code;
     }
@@ -573,8 +580,20 @@ var RunfastShare = (function () {
   const activeSession = () => db.sessions.find((s) => s.status === 'active') || null;
 
   // ---------- 联机状态（Task 5 接线；本地模式恒 inactive） ----------
-  const online = { active: false, code: null, room: null, status: 'idle', uid: null };
+  const online = { active: false, code: null, room: null, status: 'idle', uid: null, presence: [] };
   function sessionCtx() { return online.active ? online.room.session : activeSession(); }
+
+  // 联机派生态：座位/房主/我坐哪些座/本局参与座位/是否坐满
+  const isOwner = () => !!(online.room && online.room.creatorUid === online.uid);
+  const seatsOf = () => (online.room && online.room.seats) || [];
+  const mySeatIdx = () => seatsOf().reduce((a, s, i) => (s.claimedBy === online.uid ? (a.push(i), a) : a), []);
+  const isSeated = () => mySeatIdx().length > 0;
+  const activeIdx = () => {
+    const s = online.room && online.room.session;
+    if (!s) return [];
+    return seatsOf().reduce((a, seat, i) => (s.activePlayers.includes(seat.name) ? (a.push(i), a) : a), []);
+  };
+  const allClaimed = () => seatsOf().length > 0 && seatsOf().every((s) => s.claimedBy);
   async function commitSession(mutator) {
     if (online.active) {
       if (!RunfastSync.canEdit(online.room, online.uid)) {
@@ -900,28 +919,35 @@ var RunfastShare = (function () {
         onRoom(room) {
           online.room = room;
           if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
-          // 我在记分页时，只有锁被「别人」抢占才退回（避免双记）；
-          // 锁为空（我自己保存/返回释放，或超时无人接管）不算被抢，不弹提示。
-          if (view.name === 'record') {
-            const e = room.editing;
-            if (e && e.uid && e.uid !== online.uid) { alert('有人抢先记这一局了，你的操作已取消'); go({ name: 'session' }); return; }
-          }
-          if (view.name === 'record' && !RunfastSync.canEdit(room, online.uid)) { go({ name: 'session' }); return; }
-          if (['session', 'record', 'players'].includes(view.name)) render();
+          routeByPhase();
         },
-        onStatus(s) {
-          online.status = s;
-          if (['session', 'players'].includes(view.name)) render();
+        onStatus(st) {
+          online.status = st;
+          if (['lobby', 'session'].includes(view.name)) render();
+        },
+        onPresence(devices) {
+          online.presence = devices;
+          if (['lobby', 'session'].includes(view.name)) render();
         },
         onDeleted() {
-          const wasAdmin = RunfastSync.canAdmin(online.room, online.uid);
+          const wasOwner = isOwner();
           leaveOnline();
-          if (!wasAdmin) alert('房间已被房主关闭');
+          if (!wasOwner) alert('房间已被房主关闭');
           go({ name: 'home' });
         },
       });
-      go({ name: 'session' });
+      routeByPhase();
     } catch (e) { alert('进入房间失败：' + e.message); }
+  }
+
+  // 按房间阶段决定当前应在哪个视图（大厅/记分/结算），并在原地更新
+  function routeByPhase() {
+    const phase = online.room.phase;
+    if (phase === 'lobby') {
+      if (view.name !== 'lobby') go({ name: 'lobby' }); else render();
+    } else if (phase === 'playing') {
+      if (view.name !== 'session') go({ name: 'session' }); else render();
+    }
   }
 
   function leaveOnline() {

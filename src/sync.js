@@ -136,7 +136,14 @@ var RunfastSync = (function () {
       const code = genRoomCode();
       const { data } = await readRoom(code);
       if (data !== null) continue; // 房号被占用，换一个
-      const room = { creatorUid: deviceId, allowEdit: false, updatedAt: Date.now(), session };
+      const room = {
+        creatorUid: deviceId,
+        phase: 'lobby',
+        seats: session.players.map((n) => ({ name: n, claimedBy: null })),
+        draft: null,
+        updatedAt: Date.now(),
+        session,
+      };
       await writeRoom(code, room);
       return code;
     }
