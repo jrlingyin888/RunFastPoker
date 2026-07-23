@@ -112,8 +112,9 @@ test('SSE：连上先收首帧全量，房间更新后收到广播', async () =>
         let idx;
         while ((idx = buf.indexOf('\n\n')) >= 0) {
           const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          const isPut = chunk.split('\n').some((l) => l.startsWith('event: put'));
           const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-          if (!line) continue;
+          if (!isPut || !line) continue;
           frames.push(JSON.parse(line.slice(6)));
           if (frames.length === 1) {
             req(port, 'PUT', '/rooms/777888', { ...sampleRoom(), allowEdit: true }, { 'X-Device-Id': 'boss' });
@@ -196,4 +197,36 @@ test('PATCH 集成：抢座成功、后到者越权被拒', async () => {
     r = await req(port, 'PATCH', '/rooms/300400', { path: '/seats/0/claimedBy', value: 'y' }, { 'X-Device-Id': 'y' });
     assert.equal(r.status, 403);
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('presence：带 dev 的连接会进在线名单并广播；第二人上线后名单含两人', async () => {
+  const df = tmpData(); const server = createRunfastServer({ dataFile: df }); const port = await listen(server);
+  const frames = [];
+  let r2;
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { r1.destroy(); reject(new Error('presence 超时')); }, 4000);
+      const r1 = http.request({ host: '127.0.0.1', port, method: 'GET', path: '/rooms/500600/events?dev=alice' }, (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c; let idx;
+          while ((idx = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+            const isPresence = chunk.split('\n').some((l) => l.startsWith('event: presence'));
+            const dl = chunk.split('\n').find((l) => l.startsWith('data: '));
+            if (!isPresence || !dl) continue;
+            frames.push(JSON.parse(dl.slice(6)));
+            if (frames.length === 1) {
+              r2 = http.request({ host: '127.0.0.1', port, method: 'GET', path: '/rooms/500600/events?dev=bob' }, () => {});
+              r2.end();
+            } else if (frames.length >= 2) { clearTimeout(timer); r1.destroy(); resolve(); }
+          }
+        });
+      });
+      r1.on('error', reject); r1.end();
+    });
+    assert.deepEqual(frames[0].devices, ['alice']);
+    const last = frames[frames.length - 1].devices;
+    assert.ok(last.includes('alice') && last.includes('bob'));
+  } finally { if (r2) r2.destroy(); server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });

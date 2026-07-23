@@ -134,6 +134,34 @@ function createRunfastServer(options = {}) {
   try { rooms = JSON.parse(fs.readFileSync(dataFile, 'utf8')) || {}; } catch (e) { rooms = {}; }
 
   const subscribers = new Map(); // code -> Set<res>
+  const presence = new Map();    // code -> Map<deviceId, refCount>（在线名单，临时态，不落地）
+  function presenceDevices(code) {
+    const mm = presence.get(code);
+    return mm ? Array.from(mm.keys()) : [];
+  }
+  function sendPresence(res, code) {
+    res.write('event: presence\n');
+    res.write('data: ' + JSON.stringify({ devices: presenceDevices(code) }) + '\n\n');
+  }
+  function broadcastPresence(code) {
+    const set = subscribers.get(code);
+    if (!set) return;
+    for (const res of set) sendPresence(res, code);
+  }
+  function addPresence(code, dev) {
+    let mm = presence.get(code);
+    if (!mm) { mm = new Map(); presence.set(code, mm); }
+    mm.set(dev, (mm.get(dev) || 0) + 1);
+    broadcastPresence(code);
+  }
+  function removePresence(code, dev) {
+    const mm = presence.get(code);
+    if (!mm) return;
+    const n = (mm.get(dev) || 0) - 1;
+    if (n <= 0) mm.delete(dev); else mm.set(dev, n);
+    if (!mm.size) presence.delete(code);
+    broadcastPresence(code);
+  }
   let saveTimer = null;
   function scheduleSave() {
     if (saveTimer) return;
@@ -217,8 +245,14 @@ function createRunfastServer(options = {}) {
         let set = subscribers.get(code);
         if (!set) { set = new Set(); subscribers.set(code, set); }
         set.add(res);
+        const dev = u.searchParams.get('dev');
+        if (dev) addPresence(code, dev);    // 登记并广播（含本连接）最新在线名单
+        else sendPresence(res, code);       // 无 dev 的连接也给一帧当前名单
         const hb = setInterval(() => res.write(':keep-alive\n\n'), 30000);
-        req.on('close', () => { clearInterval(hb); set.delete(res); if (!set.size) subscribers.delete(code); });
+        req.on('close', () => {
+          clearInterval(hb); set.delete(res); if (!set.size) subscribers.delete(code);
+          if (dev) removePresence(code, dev);
+        });
         return;
       }
       if (!isEvents && req.method === 'GET') { json(res, 200, rooms[code] || null); return; }
