@@ -87,6 +87,7 @@ rooms/<code>: {
 }
 ```
 - `seats[i].name === session.players[i]`。离场：名字留在 `players`、移出 `activePlayers`、该座 `claimedBy` 置空。
+- **`draft.winner` / `draft.entries` 以座位下标（整数）为键**，不用名字：字段级写路径形如 `/draft/entries/2`，而名字可能含 `/` 等特殊字符会破坏路径；座位只增不删（离场只标记不删除），故下标稳定。`draftToRound` 时再用 `seats[下标].name` 映射回名字。
 - **presence 不在房间对象内**（临时态，不落地 `server-data.json`）。
 - `session` 同构 ⇒ `logic.js` 结算 / 积分 / 战绩全部复用，零改动。
 
