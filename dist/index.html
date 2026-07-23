@@ -859,10 +859,11 @@ var RunfastShare = (function () {
         onRoom(room) {
           online.room = room;
           if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
-          // 我在记分页但锁已不在我手（被抢先/失效被他人接管）→ 退回，避免双记
+          // 我在记分页时，只有锁被「别人」抢占才退回（避免双记）；
+          // 锁为空（我自己保存/返回释放，或超时无人接管）不算被抢，不弹提示。
           if (view.name === 'record') {
-            const e = RunfastSync.activeLock(room, Date.now());
-            if (!e || e.uid !== online.uid) { alert('有人抢先记这一局了，你的操作已取消'); go({ name: 'session' }); return; }
+            const e = room.editing;
+            if (e && e.uid && e.uid !== online.uid) { alert('有人抢先记这一局了，你的操作已取消'); go({ name: 'session' }); return; }
           }
           if (view.name === 'record' && !RunfastSync.canEdit(room, online.uid)) { go({ name: 'session' }); return; }
           if (['session', 'record', 'players'].includes(view.name)) render();
@@ -1120,9 +1121,11 @@ var RunfastShare = (function () {
     },
 
     async cancelRecord() {
-      if (online.active) await releaseEditLock(); // 返回即释放记分锁，别人可接着记
-      App.goSession();
+      const wasOnline = online.active;
+      App.goSession();                  // 先离开记分页，避免「释放锁」的回声打到本页触发误判
+      if (wasOnline) releaseEditLock();  // 再释放记分锁，别人可接着记
     },
+
 
     pickWinner(name) {
       view.winner = name;
