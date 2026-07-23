@@ -317,6 +317,7 @@ var RunfastSync = (function () {
       if (data !== null) continue; // 房号被占用，换一个
       const room = {
         creatorUid: deviceId,
+        allowEdit: false, // 是否允许非房主修改「已保存的一局」（记分阶段用协作草稿，与此无关）
         phase: 'lobby',
         seats: session.players.map((n) => ({ name: n, claimedBy: null })),
         draft: null,
@@ -740,36 +741,92 @@ var RunfastShare = (function () {
   VIEWS.session = () => {
     const s = sessionCtx();
     if (!s) return VIEWS.home();
-    const editable = !online.active || RunfastSync.canEdit(online.room, online.uid);
-    const admin = !online.active || (online.room && RunfastSync.canAdmin(online.room, online.uid));
-    const busy = otherEditing(); // 别人正在记一局：本端暂不能编辑
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
+    const scoreCard = `<div class="card">
+      ${net.map((p) => `<div class="row">
+        <span>${esc(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+        <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
+      </div>`).join('')}</div>`;
+    const roundsCard = `<div class="card" style="margin-top:12px">
+      ${s.rounds.map((r, i) => roundRow(s, r, i, !online.active ? false : !isOwner())).join('')
+        || '<div class="muted">还没有记录' + (online.active ? '，在上面记这一局' : '，点上面「记一局」开始') + '</div>'}</div>`;
+
+    if (online.active) {
+      return `
+        ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '')}
+        ${onlineBar()}
+        ${scoreCard}
+        ${draftCard()}
+        ${isOwner() ? `<div style="display:flex;gap:10px;margin-top:10px">
+          <button class="btn" onclick="App.goPlayers()">玩家管理</button>
+          <button class="btn" onclick="App.voidSession()">作废本场</button>
+        </div>
+        <div style="margin-top:10px"><button class="btn btn-danger" onclick="App.finishSession()">结束本场</button></div>` : ''}
+        ${roundsCard}`;
+    }
+    // 本地单机（原逻辑）
     return `
-      ${topbar(`已记 ${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张`, online.active ? '' : 'App.goHome()')}
-      ${syncBar()}
-      <div class="card">
-        ${net.map((p) => `<div class="row">
-          <span>${esc(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
-          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
-        </div>`).join('')}
-      </div>
-      ${busy
-        ? `<div class="muted" style="text-align:center;margin:10px 0;padding:14px;background:rgba(0,0,0,.06);border-radius:12px">✍️ 有人正在记这一局，请稍候…</div>`
-        : editable
-          ? `<button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>`
-          : '<div class="muted" style="text-align:center;margin:6px 0">👀 观战中——房主开启「允许他人修改」后你才能记分</div>'}
-      ${editable && !busy ? `<div style="display:flex;gap:10px;margin-top:10px">
+      ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()')}
+      ${scoreCard}
+      <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
+      <div style="display:flex;gap:10px;margin-top:10px">
         <button class="btn" onclick="App.goPlayers()">玩家管理</button>
-        ${admin ? `<button class="btn" onclick="App.voidSession()">作废本场</button>` : ''}
-      </div>` : ''}
-      ${admin ? `<div style="margin-top:10px">
-        <button class="btn btn-danger" onclick="App.finishSession()">结束本场</button>
-      </div>` : ''}
-      <div class="card" style="margin-top:12px">
-        ${s.rounds.map((r, i) => roundRow(s, r, i, !editable || !!busy)).join('')
-          || '<div class="muted">还没有记录' + (editable && !busy ? '，点上面「记一局」开始' : '') + '</div>'}
-      </div>`;
+        <button class="btn" onclick="App.voidSession()">作废本场</button>
+      </div>
+      <div style="margin-top:10px"><button class="btn btn-danger" onclick="App.finishSession()">结束本场</button></div>
+      ${roundsCard}`;
   };
+
+  // 联机协作草稿：赢家先定 → 各座各填「剩几张」并点确认 → 全部确认后自动记录本局（房主端提交）
+  function draftCard() {
+    const room = online.room;
+    const seats = seatsOf();
+    const idxs = activeIdx();                 // 本局参与的座位下标
+    const draft = room.draft || { winner: null, entries: {} };
+    const mine = new Set(mySeatIdx());
+    const owner = isOwner();
+    const canFill = (i) => mine.has(i) || owner;
+
+    // 1) 谁赢了
+    if (draft.winner == null) {
+      return `<div class="card">
+        <div class="section-title">这一局 · 谁赢了？（赢的人点自己）</div>
+        <div class="chips">${idxs.map((i) =>
+          `<button class="chip" onclick="App.draftPickWinner(${i})">${esc(seats[i].name)}</button>`).join('')}</div>
+        <div class="muted" style="margin-top:8px">${isSeated() || owner ? '赢家先点，其余各自填「剩几张」并确认，全部确认后自动记这一局。' : '观战中，看大家记分即可'}</div>
+      </div>`;
+    }
+
+    // 2) 各座各填并确认
+    const losers = idxs.filter((i) => i !== draft.winner);
+    const doneCount = losers.filter((i) => draft.entries[i] && draft.entries[i].confirmed).length;
+    const rows = losers.map((i) => {
+      const e = draft.entries[i];
+      const filled = e && typeof e.cardsLeft === 'number';
+      const done = !!(e && e.confirmed);
+      if (!canFill(i)) {
+        return `<div class="row"><span>${esc(seats[i].name)}</span>
+          <span class="${done ? 'pos' : 'muted'}">${done ? ('✓ ' + e.cardsLeft + ' 张' + (e.shutout ? '（全关）' : '')) : (filled ? (e.cardsLeft + ' 张 · 待确认') : '填写中…')}</span></div>`;
+      }
+      const v = filled ? e.cardsLeft : -1;
+      const shutBadge = v === 10
+        ? `<button class="badge" ${e.shutout ? '' : 'style="background:#e5e7eb;color:#374151"'} onclick="App.draftToggleShutout(${i})">${e.shutout ? '全关 ×2（点此取消）' : '全关已取消（点此恢复）'}</button>`
+        : '';
+      return `<div class="card"${done ? ' style="opacity:.7"' : ''}>
+        <div class="section-title">${esc(seats[i].name)}${mine.has(i) ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}</div>
+        <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
+          `<button class="${v === k ? 'on' : ''}" onclick="App.draftFill(${i},${k})">${k}</button>`).join('')}</div>
+        <button class="btn ${done ? '' : 'btn-primary'}" style="margin-top:10px" ${filled ? '' : 'disabled style="opacity:.4"'} onclick="App.draftConfirm(${i})">
+          ${done ? '✓ 已确认（点此修改）' : '确认这格'}</button>
+      </div>`;
+    }).join('');
+
+    return `<div class="card">
+      <div class="section-title">这一局 · ${esc(seats[draft.winner].name)} 赢${(isSeated() || owner) ? ' <button class="btn btn-sm" onclick="App.draftPickWinner(null)">改赢家</button>' : ''}</div>
+      <div class="muted">赢家 0 张；其余各自填「剩几张」并点确认。已确认 ${doneCount}/${losers.length} 人，全部确认后自动记这一局。</div>
+    </div>
+    ${rows}`;
+  }
 
   // ---------- 记一局 ----------
   function currentLosers() {
@@ -956,6 +1013,7 @@ var RunfastShare = (function () {
         onRoom(room) {
           online.room = room;
           if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
+          maybeAutoSaveDraft(); // 房主端：本局全部确认则自动记一局
           routeByPhase();
         },
         onStatus(st) {
@@ -1067,6 +1125,46 @@ var RunfastShare = (function () {
     return Array.from(names).every((n) => validName(n));
   }
 
+  // 改赢家时保留其余已填、去掉新赢家那格
+  function cleanEntries(winnerIdx) {
+    const src = (online.room.draft && online.room.draft.entries) || {};
+    const out = {};
+    for (const k of Object.keys(src)) if (Number(k) !== winnerIdx) out[k] = src[k];
+    return out;
+  }
+
+  // 本局所有输家都点了确认？（winner 已定 + 每个输家 entry 已填且 confirmed）
+  function draftAllConfirmed(draft, idxs) {
+    if (!draft || draft.winner == null) return false;
+    const losers = idxs.filter((i) => i !== draft.winner);
+    if (!losers.length) return false;
+    return losers.every((i) => draft.entries && draft.entries[i]
+      && typeof draft.entries[i].cardsLeft === 'number' && draft.entries[i].confirmed);
+  }
+
+  // 房主端：本局全部确认后自动提交成一局（只有房主能写 session.rounds；幂等，防重复）
+  let _autoSaving = false;
+  async function maybeAutoSaveDraft() {
+    if (_autoSaving || !online.active || !isOwner()) return;
+    const room = online.room;
+    if (!room || room.phase !== 'playing') return;
+    const idxs = activeIdx();
+    if (!draftAllConfirmed(room.draft, idxs)) return;
+    _autoSaving = true;
+    try {
+      const seats = seatsOf();
+      await RunfastSync.mutate(online.code, (r) => {
+        if (!draftAllConfirmed(r.draft, idxs)) return r; // 幂等：草稿已被清/未齐则不动
+        const round = RunfastSync.draftToRound(r.draft, seats, idxs);
+        r.session.rounds.push({ id: 'r' + Date.now(), at: new Date().toISOString(), winner: round.winner, losers: round.losers });
+        r.draft = null;
+        r.updatedAt = Date.now();
+        return r;
+      });
+    } catch (e) { /* 失败无妨：下次 onRoom 推送回来会再判一次 */ }
+    finally { _autoSaving = false; }
+  }
+
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
@@ -1104,6 +1202,32 @@ var RunfastShare = (function () {
       if (!allClaimed()) { alert('还有空座，等大家都入座再开始'); return; }
       try { await RunfastSync.patch(online.code, '/phase', 'playing'); }
       catch (e) { alert('开始失败：' + e.message); }
+    },
+
+    async draftPickWinner(i) {
+      if (!(isSeated() || isOwner())) { alert('观战中不能记分'); return; }
+      try {
+        // 定/改赢家：清掉新赢家自己的 entry（赢家不填）
+        await RunfastSync.patch(online.code, '/draft', { winner: i, entries: cleanEntries(i) });
+      } catch (e) { alert(e.message); }
+    },
+    async draftFill(i, k) {
+      // 改数即回到「未确认」，需重新点确认
+      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: k, shutout: k === 10, confirmed: false }); }
+      catch (e) { alert(e.message); }
+    },
+    async draftToggleShutout(i) {
+      const e = (online.room.draft && online.room.draft.entries[i]) || null;
+      if (!e || typeof e.cardsLeft !== 'number') return;
+      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: e.cardsLeft, shutout: !e.shutout, confirmed: false }); }
+      catch (err) { alert(err.message); }
+    },
+    async draftConfirm(i) {
+      const e = (online.room.draft && online.room.draft.entries[i]) || null;
+      if (!e || typeof e.cardsLeft !== 'number') { alert('先选「剩几张」再确认'); return; }
+      // 切换确认/取消确认；全部确认后房主端会自动记这一局
+      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: e.cardsLeft, shutout: !!e.shutout, confirmed: !e.confirmed }); }
+      catch (err) { alert(err.message); }
     },
 
     rejoinRoom() {

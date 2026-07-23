@@ -138,6 +138,7 @@ var RunfastSync = (function () {
       if (data !== null) continue; // 房号被占用，换一个
       const room = {
         creatorUid: deviceId,
+        allowEdit: false, // 是否允许非房主修改「已保存的一局」（记分阶段用协作草稿，与此无关）
         phase: 'lobby',
         seats: session.players.map((n) => ({ name: n, claimedBy: null })),
         draft: null,
