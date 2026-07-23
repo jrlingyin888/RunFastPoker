@@ -52,6 +52,7 @@
       try {
         await RunfastSync.mutate(online.code, (room) => {
           mutator(room.session);
+          if (room.editing && room.editing.uid === online.uid) delete room.editing; // 提交即释放我的记分锁
           room.updatedAt = Date.now();
           return room;
         });
@@ -61,6 +62,30 @@
       saveDB();
       render();
     }
+  }
+
+  // ---------- 记分锁（联机下防止两人同时记一局）----------
+  // 别人正在记分则返回其锁，否则 null；本地模式恒 null。
+  function otherEditing() {
+    if (!online.active) return null;
+    const e = RunfastSync.activeLock(online.room, Date.now());
+    return e && e.uid !== online.uid ? e : null;
+  }
+  async function acquireEditLock() {
+    await RunfastSync.mutate(online.code, (room) => {
+      room.editing = { uid: online.uid, at: Date.now() };
+      room.updatedAt = Date.now();
+      return room;
+    });
+  }
+  async function releaseEditLock() {
+    try {
+      await RunfastSync.mutate(online.code, (room) => {
+        if (room.editing && room.editing.uid === online.uid) delete room.editing;
+        room.updatedAt = Date.now();
+        return room;
+      });
+    } catch (e) { /* 释放失败无妨，TTL 会兜底 */ }
   }
 
   const topbar = (title, backJs) =>
@@ -165,6 +190,7 @@
     if (!s) return VIEWS.home();
     const editable = !online.active || RunfastSync.canEdit(online.room, online.uid);
     const admin = !online.active || (online.room && RunfastSync.canAdmin(online.room, online.uid));
+    const busy = otherEditing(); // 别人正在记一局：本端暂不能编辑
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     return `
       ${topbar(`已记 ${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张`, online.active ? '' : 'App.goHome()')}
@@ -175,8 +201,12 @@
           <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
         </div>`).join('')}
       </div>
-      ${editable ? `<button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>` : '<div class="muted" style="text-align:center;margin:6px 0">👀 观战中——房主开启「允许他人修改」后你才能记分</div>'}
-      ${editable ? `<div style="display:flex;gap:10px;margin-top:10px">
+      ${busy
+        ? `<div class="muted" style="text-align:center;margin:10px 0;padding:14px;background:rgba(0,0,0,.06);border-radius:12px">✍️ 有人正在记这一局，请稍候…</div>`
+        : editable
+          ? `<button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>`
+          : '<div class="muted" style="text-align:center;margin:6px 0">👀 观战中——房主开启「允许他人修改」后你才能记分</div>'}
+      ${editable && !busy ? `<div style="display:flex;gap:10px;margin-top:10px">
         <button class="btn" onclick="App.goPlayers()">玩家管理</button>
         ${admin ? `<button class="btn" onclick="App.voidSession()">作废本场</button>` : ''}
       </div>` : ''}
@@ -184,8 +214,8 @@
         <button class="btn btn-danger" onclick="App.finishSession()">结束本场</button>
       </div>` : ''}
       <div class="card" style="margin-top:12px">
-        ${s.rounds.map((r, i) => roundRow(s, r, i, !editable)).join('')
-          || '<div class="muted">还没有记录' + (editable ? '，点上面「记一局」开始' : '') + '</div>'}
+        ${s.rounds.map((r, i) => roundRow(s, r, i, !editable || !!busy)).join('')
+          || '<div class="muted">还没有记录' + (editable && !busy ? '，点上面「记一局」开始' : '') + '</div>'}
       </div>`;
   };
 
@@ -214,7 +244,7 @@
           || '<div class="muted">其他人都 0 张，本局无转账</div>'}</div>`;
     }
     return `
-      ${topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.goSession()')}
+      ${topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.cancelRecord()')}
       <div class="card">
         <div class="section-title">1️⃣ 谁赢了？</div>
         <div class="chips">${ps.map((n) =>
@@ -294,10 +324,10 @@
     ${topbar('加入联机场', 'App.goHome()')}
     <div class="card">
       <div class="section-title">输入 6 位房号</div>
-      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159">
+      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? esc(view.code) : ''}">
       <div class="gap"></div>
       <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
-      <div class="muted" style="margin-top:10px">房号问房主要，或直接点房主发到群里的链接。</div>
+      <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
     </div>`;
 
   function syncBar() {
@@ -323,8 +353,9 @@
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
         if (saved && saved.code === code) localStorage.removeItem('runfast.sync.room');
-        alert('房号不存在或已关闭');
-        render();
+        // 从邀请链接/回到房间进来但房间暂时不在：带着房号去「加入联机场」，一键重试，不用手输
+        alert('房间 ' + code + ' 暂时进不去，可能房主还没建好或已关闭。已帮你填好房号，稍后点「进入房间」重试即可。');
+        go({ name: 'joinRoom', code });
         return;
       }
       online.active = true;
@@ -336,6 +367,11 @@
         onRoom(room) {
           online.room = room;
           if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
+          // 我在记分页但锁已不在我手（被抢先/失效被他人接管）→ 退回，避免双记
+          if (view.name === 'record') {
+            const e = RunfastSync.activeLock(room, Date.now());
+            if (!e || e.uid !== online.uid) { alert('有人抢先记这一局了，你的操作已取消'); go({ name: 'session' }); return; }
+          }
           if (view.name === 'record' && !RunfastSync.canEdit(room, online.uid)) { go({ name: 'session' }); return; }
           if (['session', 'record', 'players'].includes(view.name)) render();
         },
@@ -583,10 +619,17 @@
       App.goSession();
     },
 
-    goRecord() {
+    async goRecord() {
       const s = sessionCtx();
       if (s.activePlayers.length < 2) { alert('在场玩家不足 2 人，请先到「玩家管理」加人'); return; }
+      if (otherEditing()) { alert('有人正在记这一局，请等 TA 记完再操作'); render(); return; }
+      if (online.active) { try { await acquireEditLock(); } catch (e) { alert('操作失败：' + e.message); return; } }
       go({ name: 'record', participants: s.activePlayers.slice(), winner: null, cards: Object.create(null), shutoutOff: Object.create(null), editId: null, editIndex: null });
+    },
+
+    async cancelRecord() {
+      if (online.active) await releaseEditLock(); // 返回即释放记分锁，别人可接着记
+      App.goSession();
     },
 
     pickWinner(name) {
@@ -626,7 +669,8 @@
       App.goSession();
     },
 
-    editRound(rid) {
+    async editRound(rid) {
+      if (otherEditing()) { alert('有人正在记这一局，请等 TA 记完再操作'); return; }
       const s = sessionCtx();
       const i = s.rounds.findIndex((x) => x.id === rid);
       const r = s.rounds[i];
@@ -635,6 +679,7 @@
         cards[l.name] = l.cardsLeft;
         if (l.cardsLeft === 10 && !l.shutout) shutoutOff[l.name] = true;
       });
+      if (online.active) { try { await acquireEditLock(); } catch (e) { alert('操作失败：' + e.message); return; } }
       go({
         name: 'record',
         participants: [r.winner, ...r.losers.map((l) => l.name)],
@@ -644,6 +689,7 @@
     },
 
     deleteRound(rid) {
+      if (otherEditing()) { alert('有人正在记这一局，请等 TA 记完再操作'); return; }
       if (!confirm('删除后总分将重算，确定删除这一局？')) return;
       commitSession((s) => { s.rounds = s.rounds.filter((x) => x.id !== rid); });
     },

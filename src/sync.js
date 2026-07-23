@@ -17,6 +17,15 @@ var RunfastSync = (function () {
   const canEdit = (room, uid) => !!room && !!uid && (room.creatorUid === uid || room.allowEdit === true);
   const canAdmin = (room, uid) => !!room && !!uid && room.creatorUid === uid;
 
+  // 记分锁：房间里有人正在「记一局」时占用 room.editing={uid,at}；
+  // 超过 TTL 视为失效（防止有人中途退出/断线把整桌卡死）。返回生效中的锁或 null。
+  const LOCK_TTL = 120000;
+  function activeLock(room, now) {
+    const e = room && room.editing;
+    if (!e || !e.uid) return null;
+    return (now - e.at < LOCK_TTL) ? e : null;
+  }
+
   // SSE put 事件 → 本地房间镜像
   function applyEvent(room, path, data) {
     if (path === '/' || room == null) return data;
@@ -151,7 +160,7 @@ var RunfastSync = (function () {
     es = null; room = null; currentCode = null; cb = null;
   }
 
-  const api = { configured, genRoomCode, validRoomCode, canEdit, canAdmin, applyEvent, normalizeRoom,
+  const api = { configured, genRoomCode, validRoomCode, canEdit, canAdmin, activeLock, applyEvent, normalizeRoom,
     signIn, getUid, createRoom, readRoom, subscribe, mutate, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
