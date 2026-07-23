@@ -220,6 +220,18 @@ function openBrowser(url) {
 
 if (require.main === module) {
   const server = createRunfastServer();
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error('\n  ⚠️  端口 ' + PORT + ' 已被占用，没能启动。');
+      console.error('  多半是「跑得快联机」已经在另一个窗口开着了 —— 直接用那个就行，别重复双击。');
+      console.error('  若确定没开（可能上次没关干净）：重启电脑最省事；或换个端口启动：');
+      console.error('      PORT=8788 node server.js');
+      console.error('  （换端口后手机要用新地址，主机页二维码会自动更新。）\n');
+    } else {
+      console.error('\n  启动失败：' + e.message + '\n');
+    }
+    process.exit(1);
+  });
   server.listen(PORT, () => {
     const url = lanURL(PORT);
     console.log('\n  🃏 跑得快联机服务已启动');
@@ -228,7 +240,7 @@ if (require.main === module) {
     console.log('  主机页（本机看二维码）  : ' + url + 'host');
     if (!lanIP()) console.log('  ⚠️ 未检测到局域网 IP，请确认电脑已连 WiFi（现用 localhost，手机连不上）');
     console.log('  关闭此终端窗口 = 停止联机服务。\n');
-    openBrowser(url + 'host');
+    if (!process.env.RUNFAST_NO_OPEN) openBrowser(url + 'host');
   });
 }
 
