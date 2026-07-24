@@ -234,8 +234,11 @@ function createRunfastServer(options = {}) {
     if (req.method === 'GET' && p === '/qr') {
       const text = u.searchParams.get('text') || '';
       if (!text || text.length > 512) { res.writeHead(400); res.end('bad text'); return; }
+      let svg;
+      try { svg = qrSvg(text); }
+      catch (e) { res.writeHead(500); res.end('qr failed'); return; } // 库抛裸字符串，兜住以免拖垮整个服务
       res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(qrSvg(text));
+      res.end(svg);
       return;
     }
 
