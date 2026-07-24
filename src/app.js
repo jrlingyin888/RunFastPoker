@@ -87,7 +87,7 @@
     el.className = 'sheet-mask';
     el.innerHTML = `<div class="sheet">
       ${headerHtml || ''}
-      ${items.map((it) => `<button class="sheet-item${it.danger ? ' danger' : ''}" onclick="${it.onclick}">${it.label}</button>`).join('')}
+      ${items.map((it) => `<button class="sheet-item${it.danger ? ' danger' : ''}" onclick="${it.onclick}">${esc(it.label)}</button>`).join('')}
       <button class="sheet-item cancel">取消</button>
     </div>`;
     // 按钮的内联 onclick 先在目标上执行，这个委托监听随后关闭面板
@@ -196,10 +196,10 @@
     const s = sessionCtx();
     if (!s) return VIEWS.home();
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
-    const mine = online.active ? myNames() : new Set();   // 本地单机无联机身份，不标「我」
+    const myNameSet = online.active ? myNames() : new Set();   // 本地单机无联机身份，不标「我」
     const scoreCard = `<div class="card">
       ${net.map((p) => `<div class="row">
-        <span>${esc(p.name)}${mine.has(p.name) ? ' <span class="me-tag">我</span>' : ''}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+        <span>${esc(p.name)}${myNameSet.has(p.name) ? ' <span class="me-tag">我</span>' : ''}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
         <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
       </div>`).join('')}</div>`;
     const detailEntry = s.rounds.length
@@ -364,7 +364,7 @@
       <button class="btn" onclick="App.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
   };
 
-  // ---------- 只读局明细 ----------
+  // ---------- 局明细（按权限可改删） ----------
   VIEWS.rounds = () => {
     // 进行中的场（联机的不在 db.sessions 里）优先用 sessionCtx()，否则查本地历史
     const live = sessionCtx();
@@ -548,7 +548,7 @@
             : `<button class="btn btn-sm" onclick="App.comeBack('${esc(n)}')">回归</button>`}
         </div>`).join('')}
         <div style="display:flex;gap:8px;margin-top:12px">
-          <input type="text" id="joinName" placeholder="中途加入的玩家名字" maxlength="8">
+          <input type="text" id="joinName" placeholder="中途加入的玩家名字" maxlength="8" value="${esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
           <button class="btn btn-sm" onclick="App.joinPlayer()">加入</button>
         </div>
         <div class="muted" style="margin-top:10px">离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。</div>
@@ -761,7 +761,7 @@
       const header = `<div style="text-align:center;padding:10px 0 4px">
         <div class="muted">房号</div>
         <div style="font-size:34px;font-weight:800;letter-spacing:4px">${esc(online.code)}</div>
-        <img src="/qr?text=${encodeURIComponent(link)}" alt="扫码进房"
+        <img src="qr?text=${encodeURIComponent(link)}" alt="扫码进房" onerror="this.remove()"
              style="width:180px;height:180px;margin:10px auto 6px;display:block">
         <div class="muted">让牌友扫码，或复制链接发群里</div>
         <div class="muted" style="word-break:break-all;margin-top:4px">${esc(link)}</div>
@@ -939,6 +939,7 @@
     },
 
     goPlayers: () => go({ name: 'players' }),
+    rememberJoinName(v) { view.joinName = v; },
 
     leave(name) {
       if (online.active) {
@@ -979,9 +980,11 @@
             room.updatedAt = Date.now();
             return room;
           });
+          view.joinName = '';
         } catch (e) { alert('加人失败：' + e.message); }
         return;
       }
+      view.joinName = '';
       commitSession((x) => { x.players.push(name); x.activePlayers.push(name); });
     },
 
