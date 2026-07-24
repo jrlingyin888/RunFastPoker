@@ -1142,6 +1142,8 @@ var RunfastShare = (function () {
     return Array.from(names).every((n) => validName(n));
   }
 
+  const inviteLink = () => location.origin + location.pathname + '?room=' + online.code;
+
   // 改赢家时保留其余已填、去掉新赢家那格
   function cleanEntries(winnerIdx) {
     const src = (online.room.draft && online.room.draft.entries) || {};
@@ -1294,9 +1296,34 @@ var RunfastShare = (function () {
       } catch (e) { alert('操作失败：' + e.message); }
     },
 
-    async invite() {
-      const link = location.origin + location.pathname + '?room=' + online.code;
-      const ok = await copyToClipboard('来跑得快记分房间围观/记分：' + link + '（房号 ' + online.code + '）');
+    // 系统分享面板只在安全上下文（HTTPS / localhost）可用；
+    // 局域网明文 HTTP 下 navigator.share 根本不存在，直接走自建面板（房号 + 链接 + 二维码）。
+    async share() {
+      const link = inviteLink();
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: '跑得快记分', text: '一起来记分（房号 ' + online.code + '）', url: link });
+          return;
+        } catch (e) { if (e.name === 'AbortError') return; } // 用户取消就算了，其它错误落到降级
+      }
+      App.shareFallback();
+    },
+
+    shareFallback() {
+      const link = inviteLink();
+      const header = `<div style="text-align:center;padding:10px 0 4px">
+        <div class="muted">房号</div>
+        <div style="font-size:34px;font-weight:800;letter-spacing:4px">${esc(online.code)}</div>
+        <img src="/qr?text=${encodeURIComponent(link)}" alt="扫码进房"
+             style="width:180px;height:180px;margin:10px auto 6px;display:block">
+        <div class="muted">让牌友扫码，或复制链接发群里</div>
+        <div class="muted" style="word-break:break-all;margin-top:4px">${esc(link)}</div>
+      </div>`;
+      openSheet([{ label: '复制链接', onclick: 'App.copyInvite()' }], header);
+    },
+
+    async copyInvite() {
+      const ok = await copyToClipboard('来跑得快记分房间围观/记分：' + inviteLink() + '（房号 ' + online.code + '）');
       alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + online.code);
     },
 
