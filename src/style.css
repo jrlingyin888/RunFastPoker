@@ -75,3 +75,5 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .sheet .muted { color: #6b7280; }  /* 面板是米色底，.muted 默认的近白色在这里看不见 */
 .me-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
   background: var(--felt-light); color: var(--gold-soft); font-size: 12px; font-weight: 700; }
+.proxy-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: var(--win); color: #fff4e6; font-size: 12px; font-weight: 700; }  /* 代占的座位：暖琥珀，和绿色「我」区分开 */

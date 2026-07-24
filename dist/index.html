@@ -82,6 +82,8 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .sheet .muted { color: #6b7280; }  /* 面板是米色底，.muted 默认的近白色在这里看不见 */
 .me-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
   background: var(--felt-light); color: var(--gold-soft); font-size: 12px; font-weight: 700; }
+.proxy-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: var(--win); color: #fff4e6; font-size: 12px; font-weight: 700; }  /* 代占的座位：暖琥珀，和绿色「我」区分开 */
 
 </style>
 </head>
@@ -588,7 +590,7 @@ var RunfastShare = (function () {
   const activeSession = () => db.sessions.find((s) => s.status === 'active') || null;
 
   // ---------- 联机状态（Task 5 接线；本地模式恒 inactive） ----------
-  const online = { active: false, code: null, room: null, status: 'idle', uid: null, presence: [] };
+  const online = { active: false, code: null, room: null, status: 'idle', uid: null, presence: [], myOwn: null };
   function sessionCtx() { return online.active ? online.room.session : activeSession(); }
 
   // 联机派生态：座位/房主/我坐哪些座/本局参与座位/是否坐满
@@ -604,6 +606,25 @@ var RunfastShare = (function () {
   const allClaimed = () => seatsOf().length > 0 && seatsOf().every((s) => s.claimedBy);
   // 我坐着的那些座位对应的名字（一台设备可代占多座，故是集合）
   const myNames = () => new Set(mySeatIdx().map((i) => seatsOf()[i].name));
+  // 「本人」座位：一台设备可代占多座，只有第一个入座的记为「我」，其余记为「代」。名字存本机、按房号，刷新/重进仍记得。
+  const myOwnKey = (code) => 'runfast.me.' + code;
+  function loadMyOwn(code) { try { return localStorage.getItem(myOwnKey(code)) || null; } catch (e) { return null; } }
+  function saveMyOwn(code, name) { try { name ? localStorage.setItem(myOwnKey(code), name) : localStorage.removeItem(myOwnKey(code)); } catch (e) { /* 忽略 */ } }
+  // 我当前的「本人」座位名字：存的那个我还占着才算数；否则视为未定（不标「我」）
+  const myOwnName = () => {
+    const held = mySeatIdx();
+    if (!held.length) return null;                                 // 没坐 → 无「我」
+    const n = online.myOwn;
+    if (n && held.some((i) => seatsOf()[i].name === n)) return n;  // 明确记过且还占着 → 就是它
+    return seatsOf()[held[0]].name;                               // 回退：我持有的第一个（下标最小）座位记为「我」
+  };
+  // 名字后跟的身份小药丸：本人→「我」，我代占的→「代」，其余→无
+  function idTag(name) {
+    if (!online.active) return '';
+    if (name === myOwnName()) return ' <span class="me-tag">我</span>';
+    if (myNames().has(name)) return ' <span class="proxy-tag">代</span>';
+    return '';
+  }
   // 联机下改动「已保存的一局」/玩家管理走 canEdit（房主，或房主开启「允许他人修改」后持座者）；记分阶段用协作草稿，与此无关。
   async function commitSession(mutator) {
     if (online.active) {
@@ -744,10 +765,9 @@ var RunfastShare = (function () {
     const s = sessionCtx();
     if (!s) return VIEWS.home();
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
-    const myNameSet = online.active ? myNames() : new Set();   // 本地单机无联机身份，不标「我」
     const scoreCard = `<div class="card">
       ${net.map((p) => `<div class="row">
-        <span>${esc(p.name)}${myNameSet.has(p.name) ? ' <span class="me-tag">我</span>' : ''}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+        <span>${esc(p.name)}${idTag(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
         <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
       </div>`).join('')}</div>`;
     const detailEntry = s.rounds.length
@@ -784,6 +804,9 @@ var RunfastShare = (function () {
     </div>`;
   }
 
+  // 房主/持座人「代填」默认收起，手动点开的座位下标记在这里；每开新一局自动清空
+  const draftOpen = new Set();
+
   // 联机协作草稿：赢家先定 → 各座各填「剩几张」并点确认 → 全部确认后自动记录本局（房主端提交）
   function draftCard() {
     const room = online.room;
@@ -794,12 +817,13 @@ var RunfastShare = (function () {
     const owner = isOwner();
     const canFill = (i) => mine.has(i) || owner;
 
-    // 1) 谁赢了
+    // 1) 谁赢了（新一局开始：收起所有「代填」展开态）
     if (draft.winner == null) {
+      draftOpen.clear();
       return `<div class="card">
         <div class="section-title">这一局 · 谁赢了？（赢的人点自己）</div>
         <div class="chips">${idxs.map((i) =>
-          `<button class="chip" onclick="App.draftPickWinner(${i})">${esc(seats[i].name)}</button>`).join('')}</div>
+          `<button class="chip" onclick="App.draftPickWinner(${i})">${esc(seats[i].name)}${idTag(seats[i].name)}</button>`).join('')}</div>
         <div class="muted" style="margin-top:8px">${isSeated() || owner ? '赢家先点，其余各自填「剩几张」并确认，全部确认后自动记这一局。' : '观战中，看大家记分即可'}</div>
       </div>`;
     }
@@ -811,16 +835,29 @@ var RunfastShare = (function () {
       const e = draft.entries[i];
       const filled = e && typeof e.cardsLeft === 'number';
       const done = !!(e && e.confirmed);
-      if (!canFill(i)) {
+      const isMine = mine.has(i);
+      const expanded = isMine || draftOpen.has(i);   // 自己的座位常驻展开；代填座位点开才展开
+
+      // 收起态：紧凑状态行。房主/持座人可点「代填/改」就地展开去填。
+      if (!expanded) {
+        const status = done
+          ? ('✓ ' + e.cardsLeft + ' 张' + (e.shutout ? '（全关）' : ''))
+          : (filled ? (e.cardsLeft + ' 张 · 待确认') : '填写中…');
+        const openBtn = canFill(i)
+          ? `<button class="btn btn-sm" style="margin-left:10px" onclick="App.draftOpenSeat(${i})">${filled ? '改' : '代填'}</button>`
+          : '';
         return `<div class="row"><span>${esc(seats[i].name)}</span>
-          <span class="${done ? 'pos' : 'muted'}">${done ? ('✓ ' + e.cardsLeft + ' 张' + (e.shutout ? '（全关）' : '')) : (filled ? (e.cardsLeft + ' 张 · 待确认') : '填写中…')}</span></div>`;
+          <span><span class="${done ? 'pos' : 'muted'}">${status}</span>${openBtn}</span></div>`;
       }
+
+      // 展开态：完整数字键盘（代填座位多一个「收起」）
       const v = filled ? e.cardsLeft : -1;
       const shutBadge = v === 10
         ? `<button class="badge" ${e.shutout ? '' : 'style="background:#e5e7eb;color:#374151"'} onclick="App.draftToggleShutout(${i})">${e.shutout ? '全关 ×2（点此取消）' : '全关已取消（点此恢复）'}</button>`
         : '';
+      const collapseBtn = isMine ? '' : `<button class="btn btn-sm" style="margin-left:8px" onclick="App.draftCloseSeat(${i})">收起</button>`;
       return `<div class="card"${done ? ' style="opacity:.7"' : ''}>
-        <div class="section-title">${esc(seats[i].name)}${mine.has(i) ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}</div>
+        <div class="section-title">${esc(seats[i].name)}${seats[i].name === myOwnName() ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}${collapseBtn}</div>
         <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
           `<button class="${v === k ? 'on' : ''}" onclick="App.draftFill(${i},${k})">${k}</button>`).join('')}</div>
         <button class="btn ${done ? '' : 'btn-primary'}" style="margin-top:10px" ${filled ? '' : 'disabled style="opacity:.4"'} onclick="App.draftConfirm(${i})">
@@ -973,7 +1010,7 @@ var RunfastShare = (function () {
         <div class="section-title">选个座位（点灰色名字入座；没带手机的人可由你替 TA 入座）</div>
         <div class="chips">
           ${seats.map((seat, i) => seat.claimedBy
-            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${esc(seat.name)}${mine.has(i) ? '（我，点退座）' : ' ✓'}</button>`
+            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${esc(seat.name)}${mine.has(i) ? (seat.name === myOwnName() ? '（我，点退座）' : '（代，点退座）') : ' ✓'}</button>`
             : `<button class="chip" onclick="App.claimSeat(${i})">${esc(seat.name)}</button>`).join('')}
         </div>
         <div class="muted" style="margin-top:10px">灰色=空位，高亮=已入座。所有座位坐满后房主才能开始。</div>
@@ -1016,6 +1053,7 @@ var RunfastShare = (function () {
       online.active = true;
       online.code = code;
       online.room = data;
+      online.myOwn = loadMyOwn(code);   // 载入本机记的「本人」座位（多座时区分我/代）
       online.status = 'connecting';
       localStorage.setItem('runfast.sync.room', JSON.stringify({ code }));
       await RunfastSync.subscribe(code, {
@@ -1063,6 +1101,7 @@ var RunfastShare = (function () {
     online.code = null;
     online.room = null;
     online.status = 'idle';
+    online.myOwn = null;   // 仅清内存；localStorage 的「本人」座位保留，重进本房仍认得
     localStorage.removeItem('runfast.sync.room');
   }
 
@@ -1204,12 +1243,19 @@ var RunfastShare = (function () {
     },
 
     async claimSeat(i) {
-      try { await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', online.uid); }
-      catch (e) { alert(e.message); } // 403 = 座位已被占，onRoom 会刷新成最新
+      const name = (seatsOf()[i] || {}).name;
+      const firstClaim = !isSeated();   // 入座前我一个座都没有 → 这是我的第一个座，记为「我」；已有座再点=代占，不夺「我」
+      try {
+        await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', online.uid);
+        if (name && firstClaim) { online.myOwn = name; saveMyOwn(online.code, name); }
+      } catch (e) { alert(e.message); } // 403 = 座位已被占，onRoom 会刷新成最新
     },
     async releaseSeat(i) {
-      try { await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', null); }
-      catch (e) { alert(e.message); }
+      const name = (seatsOf()[i] || {}).name;
+      try {
+        await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', null);
+        if (name && name === online.myOwn) { online.myOwn = null; saveMyOwn(online.code, null); } // 退了本人座 → 下次入座重新认「我」
+      } catch (e) { alert(e.message); }
     },
     async startPlaying() {
       if (!isOwner()) { alert('只有房主可以开始'); return; }
@@ -1243,6 +1289,9 @@ var RunfastShare = (function () {
       try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: e.cardsLeft, shutout: !!e.shutout, confirmed: !e.confirmed }); }
       catch (err) { alert(err.message); }
     },
+    // 代填：本地展开/收起某座的数字键盘（纯 UI，不联网）
+    draftOpenSeat(i) { draftOpen.add(i); render(); },
+    draftCloseSeat(i) { draftOpen.delete(i); render(); },
 
     rejoinRoom() {
       let saved = null;
