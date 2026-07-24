@@ -610,6 +610,8 @@ var RunfastShare = (function () {
     return seatsOf().reduce((a, seat, i) => (s.activePlayers.includes(seat.name) ? (a.push(i), a) : a), []);
   };
   const allClaimed = () => seatsOf().length > 0 && seatsOf().every((s) => s.claimedBy);
+  // 我坐着的那些座位对应的名字（一台设备可代占多座，故是集合）
+  const myNames = () => new Set(mySeatIdx().map((i) => seatsOf()[i].name));
   // 联机下改动「已保存的一局」/玩家管理走 canEdit（房主，或房主开启「允许他人修改」后持座者）；记分阶段用协作草稿，与此无关。
   async function commitSession(mutator) {
     if (online.active) {
@@ -750,9 +752,10 @@ var RunfastShare = (function () {
     const s = sessionCtx();
     if (!s) return VIEWS.home();
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
+    const mine = online.active ? myNames() : new Set();   // 本地单机无联机身份，不标「我」
     const scoreCard = `<div class="card">
       ${net.map((p) => `<div class="row">
-        <span>${esc(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+        <span>${esc(p.name)}${mine.has(p.name) ? ' <span class="me-tag">我</span>' : ''}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
         <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
       </div>`).join('')}</div>`;
     const detailEntry = s.rounds.length
