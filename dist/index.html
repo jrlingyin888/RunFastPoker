@@ -1044,13 +1044,16 @@ var RunfastShare = (function () {
     } catch (e) { alert('进入房间失败：' + e.message); }
   }
 
+  // playing 阶段的合法子视图：停在这些页面时房间更新只重绘，不要把人踢回记分页
+  const PLAYING_VIEWS = ['session', 'record', 'players', 'rounds'];
+
   // 按房间阶段决定当前应在哪个视图（大厅/记分/结算），并在原地更新
   function routeByPhase() {
     const phase = online.room.phase;
     if (phase === 'lobby') {
       if (view.name !== 'lobby') go({ name: 'lobby' }); else render();
     } else if (phase === 'playing') {
-      if (view.name !== 'session') go({ name: 'session' }); else render();
+      if (!PLAYING_VIEWS.includes(view.name)) go({ name: 'session' }); else render();
     }
   }
 
