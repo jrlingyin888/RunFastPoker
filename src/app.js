@@ -981,6 +981,7 @@
             return room;
           });
           view.joinName = '';
+          render();   // 广播回声可能已先于此处重绘过一次，这里补一次让清空生效
         } catch (e) { alert('加人失败：' + e.message); }
         return;
       }
