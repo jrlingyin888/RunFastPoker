@@ -73,7 +73,7 @@
   }
 
   const topbar = (title, backJs, actionsHtml) =>
-    `<div class="topbar">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
+    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
 
   // 底部弹出面板：「更多」菜单与分享面板共用。挂在 body 上而不是 #app 里，
   // 这样联机端 onRoom 频繁 render() 重绘 #app 时面板不会被抖掉。

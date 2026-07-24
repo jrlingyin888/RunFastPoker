@@ -60,7 +60,7 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .sync-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; }
 .sync-dot.off { background: #f59e0b; }
 .topbar .actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
-.topbar .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar.has-actions .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { background: rgba(0,0,0,.28); color: var(--gold-soft); border: 1px solid rgba(212,175,55,.4);
   border-radius: 10px; padding: 7px 12px; font-size: 15px; cursor: pointer; }
 .sheet-mask { position: fixed; inset: 0; background: rgba(4,24,13,.62); z-index: 60; display: flex; align-items: flex-end; }
