@@ -761,29 +761,18 @@ var RunfastShare = (function () {
 
     if (online.active) {
       return `
-        ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '')}
+        ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
         ${onlineBar()}
         ${scoreCard}
         ${emptySeatClaimCard()}
         ${draftCard()}
-        ${isOwner() ? `<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
-          <button class="btn" onclick="App.goPlayers()">玩家管理</button>
-          <button class="btn" onclick="App.voidSession()">作废本场</button>
-          <button class="btn" onclick="App.toggleAllowEdit()">${online.room.allowEdit ? '✅ 牌友可改已存局' : '🔒 改局仅房主'}</button>
-        </div>
-        <div style="margin-top:10px"><button class="btn btn-danger" onclick="App.finishSession()">结束本场</button></div>` : ''}
         ${detailEntry}`;
     }
-    // 本地单机（原逻辑）
+    // 本地单机
     return `
-      ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()')}
+      ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()', topActions(false))}
       ${scoreCard}
       <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
-      <div style="display:flex;gap:10px;margin-top:10px">
-        <button class="btn" onclick="App.goPlayers()">玩家管理</button>
-        <button class="btn" onclick="App.voidSession()">作废本场</button>
-      </div>
-      <div style="margin-top:10px"><button class="btn btn-danger" onclick="App.finishSession()">结束本场</button></div>
       ${detailEntry}`;
   };
 
@@ -983,7 +972,7 @@ var RunfastShare = (function () {
     const mine = new Set(mySeatIdx());
     const owner = isOwner();
     return `
-      ${topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '')}
+      ${topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
       ${onlineBar()}
       <div class="card">
         <div class="section-title">选个座位（点灰色名字入座；没带手机的人可由你替 TA 入座）</div>
@@ -1007,12 +996,12 @@ var RunfastShare = (function () {
     const dot = online.status === 'connected' ? '' : 'off';
     return `<div class="sync-bar">
       <span><span class="sync-dot ${dot}"></span>房号 ${esc(online.code)} · ${playing} 人在玩 · ${watching} 人观战</span>
-      <span>
-        <button class="btn btn-sm" onclick="App.invite()">邀请</button>
-        <button class="btn btn-sm" onclick="App.leaveRoom()">退出</button>
-      </span>
     </div>`;
   }
+
+  // 顶栏右上角操作区：联机（含大厅）有分享，本地只有「更多」
+  const topActions = (withShare) =>
+    `${withShare ? '<button class="icon-btn" onclick="App.share()">分享</button>' : ''}<button class="icon-btn" onclick="App.openMore()">⋯</button>`;
 
   async function enterRoom(code) {
     try {
@@ -1272,6 +1261,26 @@ var RunfastShare = (function () {
       // 主动退出保留房号，首页「回到联机房间」可一键回来；结束/被关房的清除逻辑不受影响
       try { localStorage.setItem('runfast.sync.room', JSON.stringify({ code })); } catch (e) { /* 忽略 */ }
       App.goHome();
+    },
+
+    openMore() {
+      const items = [];
+      if (!online.active) {                       // 本地单机
+        items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
+        items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
+        items.push({ label: '结束本场', onclick: 'App.finishSession()', danger: true });
+      } else if (view.name === 'lobby') {         // 大厅：与原能力等价，只有退出
+        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
+      } else if (isOwner()) {                     // 联机房主
+        items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
+        items.push({ label: online.room.allowEdit ? '✅ 牌友可改已存局' : '🔒 改局仅房主', onclick: 'App.toggleAllowEdit()' });
+        items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
+        items.push({ label: '结束本场', onclick: 'App.finishSession()', danger: true });
+        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
+      } else {                                    // 联机牌友/观战
+        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
+      }
+      openSheet(items);
     },
 
     async toggleAllowEdit() {
