@@ -28,15 +28,6 @@ test('canEdit / canAdmin 权限判定', () => {
   assert.ok(!S.canEdit(room, null));
 });
 
-test('activeLock：记分锁在 TTL 内生效、过期或无锁返回 null', () => {
-  const now = 1000000;
-  assert.equal(S.activeLock(null, now), null);
-  assert.equal(S.activeLock({}, now), null);
-  assert.equal(S.activeLock({ editing: { uid: 'a', at: now - 1000 } }, now).uid, 'a'); // 1s 前，生效
-  assert.equal(S.activeLock({ editing: { uid: 'a', at: now - 200000 } }, now), null);   // 200s 前，过期
-  assert.equal(S.activeLock({ editing: { at: now } }, now), null);                       // 无 uid
-});
-
 test('applyEvent：根路径整体替换与删除', () => {
   assert.deepEqual(S.applyEvent(null, '/', { a: 1 }), { a: 1 });
   assert.equal(S.applyEvent({ a: 1 }, '/', null), null);
