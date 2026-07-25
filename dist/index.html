@@ -1052,13 +1052,37 @@ var RunfastShare = (function () {
   VIEWS.history = () => {
     const list = db.sessions.filter((s) => s.status === 'finished')
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    if (!list.length) {
+      return `${topbar('历史记录', 'App.goHome()')}
+        <div class="card"><div class="muted">还没有打完的场</div></div>`;
+    }
+    const edit = !!view.editMode;
+    const sel = view.sel || [];
+    const actions = edit
+      ? '<button class="icon-btn" onclick="App.historyEditOff()">完成</button>'
+      : '<button class="icon-btn" onclick="App.historyEditOn()">编辑</button>';
+    const allSel = sel.length === list.length;
+    const bar = edit ? `<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px">
+        <button class="btn btn-sm" onclick="App.historySelectAll()">${allSel ? '取消全选' : '全选'}</button>
+        <button class="btn btn-sm btn-danger" ${sel.length ? '' : 'disabled style="opacity:.4"'} onclick="App.historyDeleteSel()">删除所选（${sel.length}）</button>
+      </div>` : '';
     return `
-      ${topbar('历史记录', 'App.goHome()')}
+      ${topbar('历史记录', 'App.goHome()', actions)}
+      ${bar}
       <div class="card">
-        ${list.map((s) => `<div class="row" onclick="App.goSettle('${s.id}','history')" style="cursor:pointer">
-          <div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(esc).join('、')}</div></div>
-          <span class="muted">${s.rounds.length} 局 ›</span>
-        </div>`).join('') || '<div class="muted">还没有打完的场</div>'}
+        ${list.map((s) => {
+          const info = `<div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(esc).join('、')}</div></div>`;
+          if (edit) {
+            const on = sel.includes(s.id);
+            const box = on
+              ? '<span style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:var(--felt-light);color:#fff;text-align:center;line-height:22px;font-size:14px">✓</span>'
+              : '<span style="flex-shrink:0;width:22px;height:22px;border-radius:6px;border:2px solid #cbd5e1;display:inline-block"></span>';
+            return `<div class="row" onclick="App.historyToggle('${s.id}')" style="cursor:pointer">
+              <span style="display:flex;align-items:center;gap:12px">${box}${info}</span></div>`;
+          }
+          return `<div class="row" onclick="App.goSettle('${s.id}','history')" style="cursor:pointer">
+            ${info}<span class="muted">${s.rounds.length} 局 ›</span></div>`;
+        }).join('')}
       </div>`;
   };
 
@@ -1159,12 +1183,13 @@ var RunfastShare = (function () {
 
   // playing 阶段的合法子视图：停在这些页面时房间更新只重绘，不要把人踢回记分页
   const PLAYING_VIEWS = ['session', 'record', 'players', 'rounds'];
+  const LOBBY_VIEWS = ['lobby', 'players'];   // 大厅阶段也允许停在「玩家管理」，别被别人入座的广播弹回大厅
 
   // 按房间阶段决定当前应在哪个视图（大厅/记分/结算），并在原地更新
   function routeByPhase() {
     const phase = online.room.phase;
     if (phase === 'lobby') {
-      if (view.name !== 'lobby') go({ name: 'lobby' }); else render();
+      if (!LOBBY_VIEWS.includes(view.name)) go({ name: 'lobby' }); else render();
     } else if (phase === 'playing') {
       if (!PLAYING_VIEWS.includes(view.name)) go({ name: 'session' }); else render();
     }
@@ -1201,19 +1226,27 @@ var RunfastShare = (function () {
   // ---------- 玩家管理 ----------
   VIEWS.players = () => {
     const s = sessionCtx();
+    const preGame = s.rounds.length === 0;   // 还没开打：可真删、改名绝对安全
+    const inLobby = online.active && online.room && online.room.phase === 'lobby';
+    const back = inLobby ? 'App.backFromPlayers()' : 'App.goSession()';
     return `
-      ${topbar('玩家管理', 'App.goSession()')}
+      ${topbar('玩家管理', back)}
       <div class="card">
-        ${s.players.map((n) => `<div class="row"><span>${esc(n)}</span>
-          ${s.activePlayers.includes(n)
-            ? `<button class="btn btn-sm" onclick="App.leave('${esc(n)}')">标记离场</button>`
-            : `<button class="btn btn-sm" onclick="App.comeBack('${esc(n)}')">回归</button>`}
+        ${s.players.map((n) => `<div class="row"><span>${esc(n)}${!preGame && !s.activePlayers.includes(n) ? ' <span class="muted">（已离场）</span>' : ''}</span>
+          <span style="flex-shrink:0;display:inline-flex;gap:6px">
+            <button class="btn btn-sm" onclick="App.renamePlayer('${esc(n)}')">改名</button>
+            ${preGame
+              ? `<button class="btn btn-sm btn-danger" onclick="App.removePlayer('${esc(n)}')">删除</button>`
+              : (s.activePlayers.includes(n)
+                  ? `<button class="btn btn-sm" onclick="App.leave('${esc(n)}')">标记离场</button>`
+                  : `<button class="btn btn-sm" onclick="App.comeBack('${esc(n)}')">回归</button>`)}
+          </span>
         </div>`).join('')}
         <div style="display:flex;gap:8px;margin-top:12px">
-          <input type="text" id="joinName" placeholder="中途加入的玩家名字" maxlength="8" value="${esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
+          <input type="text" id="joinName" placeholder="加个玩家名字（8 字以内）" maxlength="8" value="${esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
           <button class="btn btn-sm" onclick="App.joinPlayer()">加入</button>
         </div>
-        <div class="muted" style="margin-top:10px">离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。</div>
+        <div class="muted" style="margin-top:10px">${preGame ? '还没开打：可改名、删除玩家或加人。' : '离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。'}</div>
       </div>`;
   };
 
@@ -1299,7 +1332,29 @@ var RunfastShare = (function () {
     goHome: () => go({ name: 'home' }),
     goSetup: () => go({ name: 'setup', sel: [], price: '1', manage: false }),
     goSession: () => go({ name: 'session' }),
-    goHistory: () => go({ name: 'history' }),
+    goHistory: () => go({ name: 'history', editMode: false, sel: [] }),
+    historyEditOn() { view.editMode = true; view.sel = []; render(); },
+    historyEditOff() { view.editMode = false; view.sel = []; render(); },
+    historyToggle(id) {
+      view.sel = view.sel || [];
+      view.sel = view.sel.includes(id) ? view.sel.filter((x) => x !== id) : view.sel.concat(id);
+      render();
+    },
+    historySelectAll() {
+      const ids = db.sessions.filter((s) => s.status === 'finished').map((s) => s.id);
+      view.sel = (view.sel && view.sel.length === ids.length) ? [] : ids;
+      render();
+    },
+    historyDeleteSel() {
+      const sel = view.sel || [];
+      if (!sel.length) return;
+      if (!confirm('删除所选的 ' + sel.length + ' 场历史记录？删除后无法恢复。')) return;
+      db.sessions = db.sessions.filter((s) => !sel.includes(s.id));
+      saveDB();
+      view.sel = [];
+      view.editMode = false;
+      render();
+    },
 
     goOnlineSetup() {
       if (!RunfastSync.configured()) { alert('联机要在房主电脑上启动「跑得快联机」服务后，用手机扫主机页二维码进入才能用'); return; }
@@ -1391,7 +1446,8 @@ var RunfastShare = (function () {
         items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
         items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
         items.push({ label: '结束本场', onclick: 'App.finishSession()', danger: true });
-      } else if (view.name === 'lobby') {         // 大厅：与原能力等价，只有退出
+      } else if (view.name === 'lobby') {         // 大厅：房主可编辑玩家（改名/增删），其余只有退出
+        if (isOwner()) items.push({ label: '✏️ 编辑玩家（改名/增删）', onclick: 'App.goPlayers()' });
         items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
       } else if (isOwner()) {                     // 联机房主
         items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
@@ -1692,6 +1748,66 @@ var RunfastShare = (function () {
       }
       view.joinName = '';
       commitSession((x) => { x.players.push(name); x.activePlayers.push(name); });
+    },
+
+    // 改名：把名字在座位 + 名单 + 已记的每一局里一并替换（各阶段都安全）；系统输入框，跟常用名录改名一致
+    renamePlayer(oldName) {
+      const s = sessionCtx();
+      if (online.active && !isOwner()) { alert('只有房主可以改名'); return; }
+      const next = (window.prompt('把「' + oldName + '」改成：', oldName) || '').trim();
+      if (!next || next === oldName) return;
+      if (!validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (s.players.includes(next)) { alert('这个名字本场已存在'); return; }
+      const rn = (x) => {
+        x.players = x.players.map((n) => (n === oldName ? next : n));
+        x.activePlayers = x.activePlayers.map((n) => (n === oldName ? next : n));
+        (x.rounds || []).forEach((r) => {
+          if (r.winner === oldName) r.winner = next;
+          (r.losers || []).forEach((l) => { if (l.name === oldName) l.name = next; });
+        });
+      };
+      if (online.active) {
+        RunfastSync.mutate(online.code, (room) => {
+          rn(room.session);
+          const seat = room.seats.find((st) => st.name === oldName);
+          if (seat) seat.name = next;
+          room.updatedAt = Date.now();
+          return room;
+        }).then(() => { if (online.myOwn === oldName) { online.myOwn = next; saveMyOwn(online.code, next); } })
+          .catch((e) => alert('改名失败：' + e.message));
+      } else {
+        commitSession(rn);
+      }
+    },
+
+    // 删除玩家（仅未开打）：把座位从房间移除、并从名单去掉。开打后请用「标记离场」。
+    removePlayer(name) {
+      const s = sessionCtx();
+      if (s.rounds.length) { alert('已经开打了，请用「标记离场」'); return; }
+      if (online.active && !isOwner()) { alert('只有房主可以删除玩家'); return; }
+      if (s.players.length <= 2) { alert('至少保留 2 名玩家'); return; }
+      if (!confirm('删除玩家「' + name + '」？')) return;
+      if (online.active) {
+        RunfastSync.mutate(online.code, (room) => {
+          room.seats = room.seats.filter((st) => st.name !== name);
+          room.session.players = room.session.players.filter((n) => n !== name);
+          room.session.activePlayers = room.session.activePlayers.filter((n) => n !== name);
+          room.updatedAt = Date.now();
+          return room;
+        }).then(() => { if (online.myOwn === name) { online.myOwn = null; saveMyOwn(online.code, null); } })
+          .catch((e) => alert('删除失败：' + e.message));
+      } else {
+        commitSession((x) => {
+          x.players = x.players.filter((n) => n !== name);
+          x.activePlayers = x.activePlayers.filter((n) => n !== name);
+        });
+      }
+    },
+
+    // 玩家管理返回：大厅阶段回大厅，否则回记分页
+    backFromPlayers() {
+      if (online.active && online.room && online.room.phase === 'lobby') go({ name: 'lobby' });
+      else App.goSession();
     },
 
     finishSession() {
