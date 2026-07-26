@@ -34,6 +34,19 @@ function lanIP() {
 }
 function lanURL(port) { return 'http://' + (lanIP() || 'localhost') + ':' + port + '/'; }
 
+// 对外基础地址：优先按「这次请求实际打进来的域名」算。
+// 公网部署（Nginx 反代 https://ipa.ydyrx.top → 本机 :8787）时 lanIP() 取不到内网段，
+// 旧逻辑会退化成 http://localhost:8787/，手机扫码指向的是手机自己 ⇒ 进不去。
+// 改为读 Host / X-Forwarded-* ，让同一份代码在「公网反代」和「局域网自建」两种部署都给出手机可达的地址。
+function reqBaseURL(req, port) {
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const isLocal = !host || /^(localhost|127\.0\.0\.1|\[?::1\]?)(:\d+)?$/i.test(host);
+  if (isLocal) return lanURL(port);          // 本机/局域网自建：回退到手机可达的局域网 IP
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+    || (host.includes(':') ? 'http' : 'https'); // 带端口多为内网直连(HTTP)；纯域名默认按 HTTPS
+  return proto + '://' + host + '/';
+}
+
 // 主机标志注入：把 dist 里的占位注释替换为设置 window.__RUNFAST_HOST__ 的脚本。
 // 页面由本服务器发出时联机可用；GitHub Pages 等静态托管无此替换 ⇒ 仅单机。
 function injectHostFlag(html) {
@@ -52,7 +65,7 @@ function qrSvg(text) {
 function hostPage(url) {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>跑得快联机 · 主机页</title>
+<title>跑得快联机 · 入口</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
     background:linear-gradient(160deg,#14532d,#0c3b20);color:#f8fafc;
@@ -65,12 +78,26 @@ function hostPage(url) {
   .n{color:#fbbf24;font-weight:700}
 </style></head><body>
   <h1>🃏 跑得快联机</h1>
-  <div class="hint">手机用<b>相机 / 系统浏览器</b>扫下面的码进入（比微信内置浏览器稳）</div>
-  <div class="qr">${qrSvg(url)}</div>
-  <div class="url">${url}</div>
-  <div class="hint">在线牌友（含本机页面）：<span class="n" id="n">0</span> 人<br>
-    电脑和手机要连<b>同一个 WiFi</b>；别用「访客网络」。关掉启动服务的终端窗口即停止。</div>
+  <div class="hint">手机用<b>相机 / 系统浏览器</b>扫码直接进入（微信里点右上角「···」→ 用浏览器打开更稳）</div>
+  <div class="qr" id="qr">${qrSvg(url)}</div>
+  <div class="url" id="url">${url}</div>
+  <div class="hint">在线牌友：<span class="n" id="n">0</span> 人<br>
+    扫码或保存这张图，随时开局。</div>
   <script>
+    // 以「浏览器真实访问地址」为准重算二维码与地址：无论是否经过反代，都指向本页所在的公网/局域网入口，
+    // 手机扫码即进开场界面，不必手打网址；也保证保存到相册的这张码是对的。
+    (function(){
+      var h = location.hostname;
+      // 页面就开在本机 localhost 时，location.origin 手机不可达；保留服务端算好的局域网地址，别覆盖。
+      if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '') return;
+      var base = location.origin + '/';
+      var urlEl = document.getElementById('url');
+      if (urlEl) urlEl.textContent = base;
+      fetch('/qr?text=' + encodeURIComponent(base))
+        .then(function(r){ return r.ok ? r.text() : null; })
+        .then(function(svg){ var q = document.getElementById('qr'); if (svg && q) q.innerHTML = svg; })
+        .catch(function(){});
+    })();
     setInterval(function(){
       fetch('/status').then(function(r){return r.json();}).then(function(s){
         document.getElementById('n').textContent = s.clients;
@@ -217,11 +244,11 @@ function createRunfastServer(options = {}) {
       res.end(injectHostFlag(html));
       return;
     }
-    // 主机页（本机屏幕看二维码）
+    // 主机页 / 入口页（屏幕看二维码；公网可分享保存）
     if (req.method === 'GET' && p === '/host') {
       const port = server.address() ? server.address().port : PORT;
       res.writeHead(200, HTML_HEADERS);
-      res.end(hostPage(lanURL(port)));
+      res.end(hostPage(reqBaseURL(req, port)));
       return;
     }
     // 在线人数
@@ -339,4 +366,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRunfastServer, canWrite, canPatch, setPath, lanIP, lanURL, qrSvg, injectHostFlag };
+module.exports = { createRunfastServer, canWrite, canPatch, setPath, lanIP, lanURL, reqBaseURL, qrSvg, injectHostFlag };

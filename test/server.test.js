@@ -156,6 +156,24 @@ test('静态：/ 注入主机标志；/host 含本机地址与内联二维码；
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 
+test('/host：经反代的公网请求生成公网地址（而非 localhost），LAN 直连仍给局域网地址', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    // 公网（Nginx 反代）：Host=域名 + X-Forwarded-Proto=https ⇒ 二维码/地址应为 https 公网入口
+    let r = await req(port, 'GET', '/host', undefined, { Host: 'ipa.ydyrx.top', 'X-Forwarded-Proto': 'https' });
+    assert.equal(r.status, 200);
+    assert.ok(r.body.includes('https://ipa.ydyrx.top/'), '反代公网请求应显示公网地址');
+    assert.ok(!/localhost:\d+/.test(r.body), '反代公网请求不应回退到 localhost');
+
+    // 局域网直连（Host 为局域网 IP:端口）：按访问地址原样给出，手机可达
+    r = await req(port, 'GET', '/host', undefined, { Host: '192.168.1.7:' + port });
+    assert.equal(r.status, 200);
+    assert.ok(r.body.includes('http://192.168.1.7:' + port + '/'), 'LAN 直连应显示局域网地址');
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
 test('setPath：按路径深设，支持数组下标与删除', () => {
   const r = { seats: [{ name: 'A', claimedBy: null }], draft: { winner: 1, entries: {} } };
   assert.equal(setPath(r, '/seats/0/claimedBy', 'd1').seats[0].claimedBy, 'd1');
