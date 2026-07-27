@@ -143,16 +143,15 @@
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
-      ${act
-        ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button>`
-        : `<button class="btn btn-primary" onclick="App.goSetup()">开新一场（本地）</button>`}
+      ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
+      <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
+      <div class="gap"></div>
+      <button class="btn" onclick="App.goJoinRoom()">加入联机场</button>
       <div class="gap"></div>
       <div style="display:flex;gap:10px">
-        <button class="btn" onclick="App.goOnlineSetup()">创建联机场</button>
-        <button class="btn" onclick="App.goJoinRoom()">加入联机场</button>
+        ${act ? '' : '<button class="btn btn-ghost" onclick="App.goSetup()">开新一场（本地）</button>'}
+        <button class="btn btn-ghost" onclick="App.goHistory()">历史记录</button>
       </div>
-      <div class="gap"></div>
-      <button class="btn" onclick="App.goHistory()">历史记录</button>
       <div class="gap"></div>
       <div class="card">
         <div class="muted" style="margin-bottom:10px">数据保存在本手机浏览器里，换手机或清缓存前请先导出</div>
@@ -161,12 +160,13 @@
       </div>`;
   };
 
-  // ---------- 开新一场 ----------
+  // ---------- 开新一场 / 创建联机场（同一张表单，按 view.mode 换文案） ----------
   VIEWS.setup = () => {
     const sel = view.sel;
     const dir = db.playerDirectory;
+    const isOnline = view.mode === 'online';
     return `
-      ${topbar('开新一场', 'App.goHome()')}
+      ${topbar(isOnline ? '创建联机场' : '开新一场', 'App.goHome()')}
       <div class="card">
         <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
           <span>选择玩家（2～8 人）</span>
@@ -189,12 +189,13 @@
           <button class="btn btn-sm" onclick="App.addPlayer()">添加</button>
         </div>
         ${sel.length ? `<div class="muted" style="margin-top:10px">已选 ${sel.length} 人：${sel.map(esc).join('、')}</div>` : ''}
+        ${isOnline ? '<div class="muted" style="margin-top:10px">这里选的人就是房间里的座位。建好后把二维码发给牌友，他们扫码认领自己的名字；没带手机的人你可以替 TA 入座。</div>' : ''}
       </div>
       <div class="card">
         <div class="section-title">每张牌单价（元）</div>
         <input type="text" id="price" inputmode="decimal" value="${esc(view.price)}" placeholder="如 1 或 0.5">
       </div>
-      <button class="btn btn-primary" onclick="App.startSession()">开始记分</button>`;
+      <button class="btn btn-primary" onclick="App.startSession()">${isOnline ? '创建房间' : '开始记分'}</button>`;
   };
 
   // ---------- 记分主页 ----------
