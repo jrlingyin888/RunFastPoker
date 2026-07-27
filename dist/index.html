@@ -854,6 +854,10 @@ var RunfastShare = (function () {
     const detailEntry = s.rounds.length
       ? `<button class="btn" style="margin-top:12px" onclick="App.goRounds('${s.id}','session')">查看每局明细（${s.rounds.length} 局） ›</button>`
       : `<div class="card" style="margin-top:12px"><div class="muted">还没有记录${online.active ? '，在上面记这一局' : '，点上面「记一局」开始'}</div></div>`;
+    // 打完就结算：能结算的人（本地自己 / 联机房主）直接在页脚点，不用再翻「⋯」菜单；没记过局时不显示
+    const settleEntry = s.rounds.length && (!online.active || isOwner())
+      ? `<button class="btn btn-ghost" style="margin-top:12px" onclick="App.finishSession()">💰 结算本场</button>`
+      : '';
 
     if (online.active) {
       return `
@@ -862,14 +866,16 @@ var RunfastShare = (function () {
         ${scoreCard}
         ${emptySeatClaimCard()}
         ${draftCard()}
-        ${detailEntry}`;
+        ${detailEntry}
+        ${settleEntry}`;
     }
     // 本地单机
     return `
       ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()', topActions(false))}
       ${scoreCard}
       <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
-      ${detailEntry}`;
+      ${detailEntry}
+      ${settleEntry}`;
   };
 
   // 记分阶段的空座认领：本局在场但没人坐的座位（本人离开又回来、或换人接手），谁都能点着接手 TA 那格，分数按名字继承。
@@ -1003,7 +1009,7 @@ var RunfastShare = (function () {
         ${view.editId ? '保存修改' : '✅ 确认保存'}</button>`;
   };
 
-  // ---------- 结算页（结束本场后 & 历史详情共用） ----------
+  // ---------- 结算页（结算本场后 & 历史详情共用） ----------
   VIEWS.settle = () => {
     const s = db.sessions.find((x) => x.id === view.sid);
     const backJs = view.from === 'history' ? 'App.goHistory()' : 'App.goHome()';
@@ -1364,7 +1370,7 @@ var RunfastShare = (function () {
 
     goOnlineSetup() {
       if (!RunfastSync.configured()) { alert('联机要在房主电脑上启动「跑得快联机」服务后，用手机扫主机页二维码进入才能用'); return; }
-      if (activeSession()) { alert('本地还有一场没打完，请先结束或作废它'); return; }
+      if (activeSession()) { alert('本地还有一场没打完，请先结算或作废它'); return; }
       go({ name: 'setup', sel: [], price: '1', manage: false, mode: 'online' });
     },
 
@@ -1448,10 +1454,9 @@ var RunfastShare = (function () {
 
     openMore() {
       const items = [];
-      if (!online.active) {                       // 本地单机
+      if (!online.active) {                       // 本地单机（「结算本场」已放到记分页页脚，不再收进这里）
         items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
         items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
-        items.push({ label: '结束本场', onclick: 'App.finishSession()', danger: true });
       } else if (view.name === 'lobby') {         // 大厅：房主可编辑玩家（改名/增删），其余只有退出
         if (isOwner()) items.push({ label: '✏️ 编辑玩家（改名/增删）', onclick: 'App.goPlayers()' });
         items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
@@ -1459,7 +1464,6 @@ var RunfastShare = (function () {
         items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
         items.push({ label: online.room.allowEdit ? '✅ 牌友可改已存局' : '🔒 改局仅房主', onclick: 'App.toggleAllowEdit()' });
         items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
-        items.push({ label: '结束本场', onclick: 'App.finishSession()', danger: true });
         items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
       } else {                                    // 联机牌友/观战
         items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
@@ -1818,16 +1822,16 @@ var RunfastShare = (function () {
 
     finishSession() {
       const s = sessionCtx();
-      if (!s.rounds.length) { alert('还没记过任何一局，不能结束'); return; }
-      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以结束本场'); return; }
-      if (!confirm('结束后不能再记新局，确定结束本场吗？')) return;
+      if (!s.rounds.length) { alert('还没记过任何一局，不能结算'); return; }
+      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以结算本场'); return; }
+      if (!confirm('结算后不能再记新局，确定结算本场吗？')) return;
       const sid = s.id;
       commitSession((x) => {
         x.status = 'finished';
         x.finishedAt = new Date().toISOString();
       });
       if (!online.active) App.goSettle(sid, 'home');
-      // 联机模式：结束状态经云端推送回来后由 onRoom 快照并跳转（Task 5）
+      // 联机模式：结算状态经云端推送回来后由 onRoom 快照并跳转（Task 5）
     },
 
     voidSession() {
