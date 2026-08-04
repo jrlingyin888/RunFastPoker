@@ -24,6 +24,9 @@ var RunfastUI = (function () {
     `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
 
   // 底部弹出面板。挂在 body 上而不是 #app 里，这样房间广播频繁重绘 #app 时面板不会被抖掉。
+  // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
+  // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
+  // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。
   function closeSheet() { const el = document.getElementById('sheet'); if (el) el.remove(); }
   function openSheet(items, headerHtml) {
     closeSheet();
@@ -32,10 +35,13 @@ var RunfastUI = (function () {
     el.className = 'sheet-mask';
     el.innerHTML = `<div class="sheet">
       ${headerHtml || ''}
-      ${items.map((it) => `<button class="sheet-item${it.danger ? ' danger' : ''}" onclick="${it.onclick}">${esc(it.label)}</button>`).join('')}
+      ${items.map((it) => `<button class="sheet-item${it.danger ? ' danger' : ''}"${
+        it.onclick ? ` onclick="${it.onclick}"` : ''}${
+        it.data ? Object.keys(it.data).map((k) => ` data-${k}="${esc(it.data[k])}"`).join('') : ''
+      }>${esc(it.label)}</button>`).join('')}
       <button class="sheet-item cancel">取消</button>
     </div>`;
-    // 按钮的内联 onclick 先在目标上执行，这个委托监听随后关闭面板
+    // 按钮的内联 onclick（或调用方装的 data-* 委托）先在目标上执行，这个委托监听随后关闭面板
     el.addEventListener('click', (ev) => {
       if (ev.target === el || ev.target.classList.contains('sheet-item')) closeSheet();
     });

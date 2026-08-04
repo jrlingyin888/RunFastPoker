@@ -108,13 +108,6 @@ function hostPage(url) {
 }
 
 // ---------- 权限校验（服务器强制）----------
-// 建房走 PUT，此后一切增量走 PATCH——房间已存在时禁止整房覆盖，避免有人拿旧快照盖掉别人刚记的分。
-function canWrite(old, neu, me) {
-  if (!me) return false;
-  if (old) return false;
-  return !!neu && neu.creatorUid === me;
-}
-
 // 按路径深设：'/a/b/2/c' → 设 obj.a.b[2].c=value（value 为 null 删该键）。返回新对象，不改原对象。
 function setPath(obj, path, value) {
   if (!path || path === '/') return value;
@@ -135,8 +128,7 @@ function setPath(obj, path, value) {
 }
 
 // 名字字符集：与前端 RunfastUI.validName 保持一致（1~8 字，不含引号/尖括号/反斜杠）。
-// 前端已经挡了，但服务端只信自己校验过的东西——名字最终会被别处设备拼进 onclick 属性里
-// （pid 用引号包住的那种），字符集不一致就等于把注入口子留在服务端这一侧。
+// 前端已经挡了，但服务端不能只信前端——服务端才是唯一必须守住的边界。
 const VALID_NAME = /^[^'"<>\\]{1,8}$/;
 
 // 一笔转账是否合法：双方都得是房内玩家、不能自己转自己、分数是正整数。
@@ -145,6 +137,36 @@ function isValidTx(v, players) {
   const has = (k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(players, k);
   return has(v.from) && has(v.to) && v.from !== v.to
     && Number.isInteger(v.points) && v.points > 0 && v.points <= 9999;
+}
+
+// pid / tx id 这类客户端生成的 key 的字符集：只认 [A-Za-z0-9_-]，1~64 字符
+// （与 canPatch 里 /tx/、/players/ 路径正则用的是同一套字符集，这里单独抽出来给 canWrite 建房校验复用）。
+const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+// 建房走 PUT，此后一切增量走 PATCH——房间已存在时禁止整房覆盖，避免有人拿旧快照盖掉别人刚记的分。
+// 建房这一刻此前只查了 creatorUid：players/tx 的内容完全没校验，等于绕开了 canPatch 逐字段做的
+// 那些校验——攻击者可以直接在建房的房间快照里一次性塞进恶意 pid、恶意名字、或凭空捏造的转账。
+// 建房必须补上同等级别的校验，否则「字段级校验很严格」只是错觉，口子就开在创建那一刻。
+function canWrite(old, neu, me) {
+  if (!me) return false;
+  if (old) return false;
+  if (!neu || neu.creatorUid !== me) return false;
+  if (neu.players !== undefined) {
+    if (!neu.players || typeof neu.players !== 'object') return false;
+    for (const pid of Object.keys(neu.players)) {
+      if (!KEY_RE.test(pid)) return false;
+      const p = neu.players[pid];
+      if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !VALID_NAME.test(p.name)) return false;
+    }
+  }
+  if (neu.tx !== undefined) {
+    if (!neu.tx || typeof neu.tx !== 'object') return false;
+    for (const id of Object.keys(neu.tx)) {
+      if (!KEY_RE.test(id)) return false;
+      if (!isValidTx(neu.tx[id], neu.players || {})) return false;
+    }
+  }
+  return true;
 }
 
 // 字段级写权限（服务器强制）。me = X-Device-Id。

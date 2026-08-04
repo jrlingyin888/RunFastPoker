@@ -46,6 +46,32 @@ test('canWrite：只允许建房，房间已存在则禁止整房覆盖', () => 
   assert.ok(!canWrite(sampleRoom(), { creatorUid: 'boss' }, 'boss')); // 房主也不能整房覆盖
 });
 
+test('canWrite：建房时逐个校验 players/tx 内容，不再是只查 creatorUid（评审 Critical 修复）', () => {
+  const base = { creatorUid: 'me' };
+  // 没带 players/tx 字段：维持原有宽松行为，不新增「必须带」这条要求
+  assert.ok(canWrite(null, { ...base }, 'me'));
+  // 合法建房：players/tx 都合法
+  assert.ok(canWrite(null, { ...base, players: { p_a: { name: 'A', uid: 'me', at: 1 } }, tx: {} }, 'me'));
+  // 评审实测的攻击 payload：pid 里带 JS 片段
+  assert.ok(!canWrite(null, { ...base, players: { "p_x'),alert(1),('": { name: 'A' } } }, 'me'));
+  // name 带 HTML/属性注入字符
+  assert.ok(!canWrite(null, { ...base, players: { p_x: { name: '<img src=x onerror=1>' } } }, 'me'));
+  assert.ok(!canWrite(null, { ...base, players: { p_x: { name: 123 } } }, 'me'));      // name 不是字符串
+  assert.ok(!canWrite(null, { ...base, players: 'nope' }, 'me'));                       // players 不是对象
+  // tx：key 不合法字符
+  assert.ok(!canWrite(null, { ...base, players: { p_a: { name: 'A' } },
+    tx: { "t'x": { from: 'p_a', to: 'p_a', points: 1 } } }, 'me'));
+  // tx：内容不合法（自转）
+  assert.ok(!canWrite(null, { ...base, players: { p_a: { name: 'A' }, p_b: { name: 'B' } },
+    tx: { t_1: { from: 'p_a', to: 'p_a', points: 1 } } }, 'me'));
+  // tx：引用了不存在的玩家
+  assert.ok(!canWrite(null, { ...base, players: { p_a: { name: 'A' } },
+    tx: { t_1: { from: 'p_a', to: 'p_zz', points: 1 } } }, 'me'));
+  // tx：合法引用，应通过
+  assert.ok(canWrite(null, { ...base, players: { p_a: { name: 'A' }, p_b: { name: 'B' } },
+    tx: { t_1: { from: 'p_a', to: 'p_b', points: 1 } } }, 'me'));
+});
+
 test('isValidTx：from/to 必须是房内玩家、不能自转、分数是 1~9999 的整数', () => {
   const ps = sampleRoom().players;
   assert.ok(isValidTx({ from: 'p_b', to: 'p_a', points: 20 }, ps));
@@ -155,6 +181,25 @@ test('REST：建房只此一次/房间已存在后整房覆盖一律拒/删房/G
 
     r = await req(port, 'GET', '/rooms/100200');
     assert.equal(r.body, 'null');
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PUT：建房时 players 里带恶意 pid/name（XSS payload）应 403，不再原样存盘', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    // 评审实测的攻击 payload：pid 里带能跳出内联 onclick 单引号的片段，name 是一段 <img onerror>
+    const evilRoom = {
+      creatorUid: 'boss', sid: 's1', createdAt: '2026-08-03T10:00:00.000Z',
+      pricePerCardFen: 100, status: 'active',
+      players: { "p_x'),alert(1),('": { name: '<img src=x onerror=alert(1)>', uid: 'boss', at: 1 } },
+      tx: {},
+    };
+    const r = await req(port, 'PUT', '/rooms/900100', evilRoom, { 'X-Device-Id': 'boss' });
+    assert.equal(r.status, 403);
+    const check = await req(port, 'GET', '/rooms/900100');
+    assert.equal(check.body, 'null'); // 没有原样存盘
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 

@@ -129,7 +129,7 @@ var RunfastRoom = (function () {
       : (!state.local && p.uid == null) ? '<span class="proxy-tag">代</span>' : '';
     const sign = points > 0 ? '+' : '';
     return `<button class="seat${left ? ' left' : ''}${(!state.local && pid === state.pid) ? ' me' : ''}"
-        onclick="Room.tapSeat('${esc(pid)}')">
+        data-room-act="seat" data-pid="${esc(pid)}">
       <span class="ava" style="background:${U.avatarColor(p.name)}">${esc(U.initial(p.name))}</span>
       <span class="nm">${esc(p.name)}${tag}</span>
       <span class="pts ${points > 0 ? 'pos' : points < 0 ? 'neg' : ''}">${sign}${points}</span>
@@ -188,13 +188,16 @@ var RunfastRoom = (function () {
   function closePay() {
     const el = document.getElementById('pay');
     if (el) el.remove();
-    state.payFrom = null; state.payTo = null;
+    state.payTo = null;
+    // payFrom 故意不清：本地单机没有「我」，下次开支出框要沿用这次选的付款人（见 openPay 的注释）
   }
   function openPay(toPid) {
     state.payTo = toPid;
-    // 联机默认「我付」；本地单机没有「我」，沿用上次选的付款人
+    // 联机默认「我付」；本地单机没有「我」，沿用上次选的付款人（由 closePay 保留）
     if (!state.local) state.payFrom = state.pid;
-    if (!state.payFrom || state.payFrom === toPid || !state.room.players[state.payFrom]) {
+    const fromOk = state.payFrom && state.payFrom !== toPid
+      && state.room.players[state.payFrom] && !state.room.players[state.payFrom].left;
+    if (!fromOk) {
       state.payFrom = Object.keys(state.room.players)
         .find((pid) => pid !== toPid && !state.room.players[pid].left) || null;
     }
@@ -233,11 +236,15 @@ var RunfastRoom = (function () {
     const inp = document.getElementById('payPoints');
     if (inp) inp.focus();
   }
-  // 输入实时折算成钱；没填就提示单价
+  // 输入实时折算成钱；没填就提示单价。校验口径必须和 submitPay 一致——
+  // 否则 '1e3'/'99999'/'12.5' 这类会被提交拒掉的输入，这里却显示着看似正常的金额或默认提示，
+  // 用户会以为能提交、点了才发现不行。
   function payHint(v) {
-    const n = Number(String(v).trim());
+    const raw = String(v).trim();
     const price = state.room.pricePerCardFen;
-    if (!Number.isInteger(n) || n <= 0) return '1 分 = ' + L.fenToYuan(price) + ' 元 · 全关就输 20';
+    if (!raw) return '1 分 = ' + L.fenToYuan(price) + ' 元 · 全关就输 20';
+    const n = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数分数';
     return n + ' 分 = ' + L.fenToYuan(n * price) + ' 元';
   }
 
@@ -279,6 +286,7 @@ var RunfastRoom = (function () {
   // 断开并清空内存态（不动 localStorage）
   function resetState() {
     S.close();
+    closePay();   // 支出弹窗可能还开着（房间被删/结算/退出这类打断），别让黑色蒙层卡在下一页上
     state.active = false; state.local = false; state.code = null;
     state.room = null; state.session = null; state.pid = null; state.status = 'idle';
     state.payFrom = null; state.payTo = null;
@@ -358,7 +366,7 @@ var RunfastRoom = (function () {
         .sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0))
         .map((pid) => ({
           label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
-          onclick: `Room.setPayer('${esc(pid)}')`,
+          data: { 'room-act': 'payer', pid },
         }));
       U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
     },
@@ -370,7 +378,15 @@ var RunfastRoom = (function () {
       if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) {
         alert('请输入 1～9999 的整数分数'); return;
       }
+      const ps = state.room.players;
       const from = state.payFrom, to = state.payTo;
+      // 弹窗开着的这段时间房间可能变了（对方退出、甚至联机端收到别的设备的广播）——提交前复查一遍，
+      // 不能光信弹窗打开那一刻缓存的 from/to 还有效。
+      if (!ps[from] || ps[from].left || !ps[to] || ps[to].left) {
+        alert('TA 已退出房间');
+        if (!ps[to] || ps[to].left) closePay(); else openPay(to);
+        return;
+      }
       if (from === to) { alert('不能给自己记分'); return; }
       const tx = { from, to, points: n, byUid: state.uid || null, at: Date.now() };
       if (state.local) {
@@ -402,12 +418,29 @@ var RunfastRoom = (function () {
       if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (S.nameTaken(state.room, name)) { alert('房间里已经有人叫这个名字了'); return; }
       host.saveName(name);
-      if (state.local) { localApply((s) => { s.players.push(name); }); return; }
+      // 本地场的数据形状里 players（花名册）和 activePlayers（在场）并存，只 push 前者的话，
+      // 旧的（还没接线到 RunfastRoom 的）视图会把新人当成「已离场」——两个数组一起同步。
+      if (state.local) { localApply((s) => { s.players.push(name); if (s.activePlayers) s.activePlayers.push(name); }); return; }
       try { await S.patch(state.code, '/players/' + S.newKey('p_'), { name, uid: null, at: Date.now() }); }
       catch (e) { alert('加人失败：' + e.message); }
     },
   };
   if (typeof window !== 'undefined') window.Room = Room;
+
+  // 座位/换人这类带「玩家」数据的按钮一律走 data-*，不把任何数据拼进内联 onclick——
+  // onclick 的内容是当 JS 源码编译的，浏览器会先把属性值里的 &#39; 解回 '，esc() 只挡得住
+  // HTML 属性这一层，挡不住紧接着的 JS 字符串拼接（pid/名字都可能来自别的设备，不可信）。
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', (ev) => {
+      const t = ev.target;
+      const el = t && t.closest ? t.closest('[data-room-act]') : null;
+      if (!el) return;
+      const pid = el.getAttribute('data-pid');
+      const act = el.getAttribute('data-room-act');
+      if (act === 'seat') Room.tapSeat(pid);
+      else if (act === 'payer') Room.setPayer(pid);
+    });
+  }
 
   const api = { init, preview, attach, close, lastName, startLocal, snapshot, state,
     views: { joinName: joinView, room: roomView } };
