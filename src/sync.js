@@ -92,25 +92,33 @@ var RunfastSync = (function () {
     return { data: normalizeRoom(await res.json()) };
   }
 
+  // HTTP 状态码挂在 error 上：调用方要靠它区分「服务端拒了」和「网络挂了」，
+  // 才能给出「这个名字刚被人用了」这种能看懂的提示，而不是笼统的失败。
+  function httpError(msg, status) {
+    const e = new Error(msg);
+    e.status = status;
+    return e;
+  }
+
   async function writeRoom(code, data) {
     const res = await fetch(roomUrl(code), {
       method: data === null ? 'DELETE' : 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId },
       body: data === null ? undefined : JSON.stringify(data),
     });
-    if (res.status === 403) throw new Error('没有修改权限');
-    if (!res.ok) throw new Error('写入失败 ' + res.status);
+    if (res.status === 403) throw httpError('没有修改权限', 403);
+    if (!res.ok) throw httpError('写入失败 ' + res.status, res.status);
   }
 
-  // 字段级写：只更新指定路径（各人填各自那格互不覆盖）。403 → 没权限/座位已被占。
+  // 字段级写：只更新指定路径（各人填各自那格互不覆盖）。403 → 服务端校验没过（名字被占/座位已被占等）。
   async function patch(code, path, value) {
     const res = await fetch(roomUrl(code), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId },
       body: JSON.stringify({ path, value }),
     });
-    if (res.status === 403) throw new Error('没有权限或座位已被占');
-    if (!res.ok) throw new Error('操作失败 ' + res.status);
+    if (res.status === 403) throw httpError('没有权限或座位已被占', 403);
+    if (!res.ok) throw httpError('操作失败 ' + res.status, res.status);
   }
 
   // 建房：房号试 5 次，建房人自己就是第一个玩家。
@@ -121,15 +129,23 @@ var RunfastSync = (function () {
       const { data } = await readRoom(code);
       if (data !== null) continue; // 房号被占用，换一个
       const pid = newKey('p_');
-      await writeRoom(code, {
-        creatorUid: deviceId,
-        sid: 's' + Date.now(),
-        createdAt: new Date().toISOString(),
-        pricePerCardFen: init.pricePerCardFen,
-        status: 'active',
-        players: { [pid]: { name: init.name, uid: deviceId, at: Date.now() } },
-        tx: {},
-      });
+      try {
+        await writeRoom(code, {
+          creatorUid: deviceId,
+          sid: 's' + Date.now(),
+          createdAt: new Date().toISOString(),
+          pricePerCardFen: init.pricePerCardFen,
+          status: 'active',
+          players: { [pid]: { name: init.name, uid: deviceId, at: Date.now() } },
+          tx: {},
+        });
+      } catch (e) {
+        // 读到「没人用」和真正写进去之间，别人可能刚好占了这个号：服务端禁止整房覆盖 ⇒ 403。
+        // 这是「换个号重试」的场景，不是错误——直接冲出循环的话用户看到的是词不达意的
+        // 「建房失败：没有修改权限」。非 403（网络挂了、服务端 500）照旧抛出去。
+        if (e.status !== 403) throw e;
+        continue;
+      }
       return { code, pid };
     }
     throw new Error('建房失败，请重试');

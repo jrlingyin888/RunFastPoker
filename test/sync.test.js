@@ -46,6 +46,39 @@ test('patch：已导出为函数（实连由第二期 e2e 覆盖）', () => {
   assert.equal(typeof S.patch, 'function');
 });
 
+// createRoom 撞房号：读到「没人用」和真正写进去之间别人抢先建了同号房，服务端禁止整房覆盖 ⇒ 403。
+// 修复前这个 403 会直接冲出 for 循环，用户看到词不达意的「建房失败：没有修改权限」。
+test('createRoom：撞房号（写入 403）时换个号重试，不把 403 冒泡成建房失败', async () => {
+  const realFetch = global.fetch;
+  const puts = [];
+  global.fetch = async (url, opt) => {
+    const method = (opt && opt.method) || 'GET';
+    if (method === 'GET') return { ok: true, status: 200, json: async () => null };   // 每个号都「没人用」
+    puts.push(String(url));
+    // 前两次 PUT 撞号（服务端 403），第三次成功
+    if (puts.length <= 2) return { ok: false, status: 403 };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  try {
+    const { code, pid } = await S.createRoom({ name: '甲', pricePerCardFen: 100 });
+    assert.match(code, /^[0-9]{6}$/);
+    assert.match(pid, /^p_/);
+    assert.equal(puts.length, 3);                       // 撞了两次，第三次才建成
+    assert.equal(new Set(puts).size, 3);                // 每次都换了新房号，不是死磕同一个
+  } finally { global.fetch = realFetch; }
+});
+
+test('createRoom：非 403 的写入失败照旧抛出去，不被当成撞号吞掉', async () => {
+  const realFetch = global.fetch;
+  global.fetch = async (url, opt) => {
+    if (!opt || (opt.method || 'GET') === 'GET') return { ok: true, status: 200, json: async () => null };
+    return { ok: false, status: 500 };
+  };
+  try {
+    await assert.rejects(() => S.createRoom({ name: '甲', pricePerCardFen: 100 }), /写入失败 500/);
+  } finally { global.fetch = realFetch; }
+});
+
 const room = () => ({
   creatorUid: 'boss', sid: 's1', pricePerCardFen: 100, status: 'active',
   players: {

@@ -20,10 +20,15 @@ var RunfastUI = (function () {
   // 按码点取首字，否则 emoji 名字会被劈成半个字符渲染成乱码
   const initial = (name) => Array.from(String(name))[0] || '?';
 
+  // 顶栏。title 一律过 esc()：现有调用点传的都是字面量或数字派生串，但标题是最容易
+  // 「顺手把房号/名字拼进去」的位置，这个分支已经为「用户数据进 HTML」栽过两次，不留这个形状。
+  // ⚠️ backJs / actionsHtml 是当 JS 源码 / HTML 片段用的，esc() 在这两个位置不起作用：
+  //    只能传硬编码字面量，任何外部可控数据（玩家名、pid、房号…）都必须走 data-* + 事件委托。
   const topbar = (title, backJs, actionsHtml) =>
-    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
+    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${esc(title)}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
 
   // 底部弹出面板。挂在 body 上而不是 #app 里，这样房间广播频繁重绘 #app 时面板不会被抖掉。
+  // ⚠️ items[].onclick 同 topbar 的 backJs：当 JS 源码用，只能传硬编码字面量。
   // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
   // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
   // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。

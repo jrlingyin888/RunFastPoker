@@ -18,6 +18,18 @@ test('validName：1~8 字且不含引号尖括号反斜杠', () => {
   assert.ok(!U.validName('a\\b'));
 });
 
+test('topbar：title 过 esc；纯文字标题渲染结果不变', () => {
+  // 现有调用点都是字面量或数字派生串：加了 esc 之后渲染结果必须一模一样
+  assert.ok(U.topbar('历史记录', 'App.goHome()').includes('<div class="title">历史记录</div>'));
+  assert.ok(U.topbar('已记 3 笔 · 0.5元/张').includes('<div class="title">已记 3 笔 · 0.5元/张</div>'));
+  assert.ok(U.topbar('加入房间 314159').includes('<div class="title">加入房间 314159</div>'));
+  // 万一将来有人把名字/房号拼进标题，撑不破标签
+  assert.ok(U.topbar('<img src=x onerror=alert(1)>').includes('&lt;img src=x onerror=alert(1)&gt;'));
+  // backJs / actionsHtml 保持原样（当 JS 源码 / HTML 片段用，只能传字面量）
+  assert.ok(U.topbar('x', 'App.goHome()').includes('onclick="App.goHome()"'));
+  assert.ok(U.topbar('x', '', '<button class="icon-btn">分享</button>').includes('<button class="icon-btn">分享</button>'));
+});
+
 test('avatarColor：同名同色、结果是合法十六进制色', () => {
   assert.equal(U.avatarColor('张三'), U.avatarColor('张三'));
   assert.match(U.avatarColor('张三'), /^#[0-9a-f]{6}$/);

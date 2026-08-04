@@ -354,25 +354,33 @@ var RunfastSync = (function () {
     return { data: normalizeRoom(await res.json()) };
   }
 
+  // HTTP 状态码挂在 error 上：调用方要靠它区分「服务端拒了」和「网络挂了」，
+  // 才能给出「这个名字刚被人用了」这种能看懂的提示，而不是笼统的失败。
+  function httpError(msg, status) {
+    const e = new Error(msg);
+    e.status = status;
+    return e;
+  }
+
   async function writeRoom(code, data) {
     const res = await fetch(roomUrl(code), {
       method: data === null ? 'DELETE' : 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId },
       body: data === null ? undefined : JSON.stringify(data),
     });
-    if (res.status === 403) throw new Error('没有修改权限');
-    if (!res.ok) throw new Error('写入失败 ' + res.status);
+    if (res.status === 403) throw httpError('没有修改权限', 403);
+    if (!res.ok) throw httpError('写入失败 ' + res.status, res.status);
   }
 
-  // 字段级写：只更新指定路径（各人填各自那格互不覆盖）。403 → 没权限/座位已被占。
+  // 字段级写：只更新指定路径（各人填各自那格互不覆盖）。403 → 服务端校验没过（名字被占/座位已被占等）。
   async function patch(code, path, value) {
     const res = await fetch(roomUrl(code), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId },
       body: JSON.stringify({ path, value }),
     });
-    if (res.status === 403) throw new Error('没有权限或座位已被占');
-    if (!res.ok) throw new Error('操作失败 ' + res.status);
+    if (res.status === 403) throw httpError('没有权限或座位已被占', 403);
+    if (!res.ok) throw httpError('操作失败 ' + res.status, res.status);
   }
 
   // 建房：房号试 5 次，建房人自己就是第一个玩家。
@@ -383,15 +391,23 @@ var RunfastSync = (function () {
       const { data } = await readRoom(code);
       if (data !== null) continue; // 房号被占用，换一个
       const pid = newKey('p_');
-      await writeRoom(code, {
-        creatorUid: deviceId,
-        sid: 's' + Date.now(),
-        createdAt: new Date().toISOString(),
-        pricePerCardFen: init.pricePerCardFen,
-        status: 'active',
-        players: { [pid]: { name: init.name, uid: deviceId, at: Date.now() } },
-        tx: {},
-      });
+      try {
+        await writeRoom(code, {
+          creatorUid: deviceId,
+          sid: 's' + Date.now(),
+          createdAt: new Date().toISOString(),
+          pricePerCardFen: init.pricePerCardFen,
+          status: 'active',
+          players: { [pid]: { name: init.name, uid: deviceId, at: Date.now() } },
+          tx: {},
+        });
+      } catch (e) {
+        // 读到「没人用」和真正写进去之间，别人可能刚好占了这个号：服务端禁止整房覆盖 ⇒ 403。
+        // 这是「换个号重试」的场景，不是错误——直接冲出循环的话用户看到的是词不达意的
+        // 「建房失败：没有修改权限」。非 403（网络挂了、服务端 500）照旧抛出去。
+        if (e.status !== 403) throw e;
+        continue;
+      }
       return { code, pid };
     }
     throw new Error('建房失败，请重试');
@@ -479,10 +495,15 @@ var RunfastUI = (function () {
   // 按码点取首字，否则 emoji 名字会被劈成半个字符渲染成乱码
   const initial = (name) => Array.from(String(name))[0] || '?';
 
+  // 顶栏。title 一律过 esc()：现有调用点传的都是字面量或数字派生串，但标题是最容易
+  // 「顺手把房号/名字拼进去」的位置，这个分支已经为「用户数据进 HTML」栽过两次，不留这个形状。
+  // ⚠️ backJs / actionsHtml 是当 JS 源码 / HTML 片段用的，esc() 在这两个位置不起作用：
+  //    只能传硬编码字面量，任何外部可控数据（玩家名、pid、房号…）都必须走 data-* + 事件委托。
   const topbar = (title, backJs, actionsHtml) =>
-    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
+    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${esc(title)}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
 
   // 底部弹出面板。挂在 body 上而不是 #app 里，这样房间广播频繁重绘 #app 时面板不会被抖掉。
+  // ⚠️ items[].onclick 同 topbar 的 backJs：当 JS 源码用，只能传硬编码字面量。
   // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
   // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
   // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。
@@ -756,7 +777,7 @@ var RunfastRoom = (function () {
   // 宿主接线：app.js 启动时注入路由、名录、结束回调
   let host = {
     go() {}, render() {}, view() { return {}; },
-    directory() { return []; }, onFinished() {}, saveName() {}, saveLocal() {},
+    directory() { return []; }, onFinished() {}, onVoided() {}, saveName() {}, saveLocal() {},
   };
   function init(h) { host = Object.assign(host, h); }
 
@@ -795,7 +816,7 @@ var RunfastRoom = (function () {
     const back = !!v.pid;   // 本机在这房间有过身份 → 这页是「确认回来」而不是「新加入」
     const dir = host.directory();
     return `
-      ${U.topbar((back ? '回到房间 ' : '加入房间 ') + esc(v.code), 'App.goHome()')}
+      ${U.topbar((back ? '回到房间 ' : '加入房间 ') + v.code, 'App.goHome()')}
       <div class="card">
         ${back ? `<div class="muted" style="margin-bottom:10px">你之前是「${esc(v.myName)}」，改个名也行，位置和分数不变。</div>` : ''}
         <div class="section-title">你的名字</div>
@@ -906,7 +927,17 @@ var RunfastRoom = (function () {
 
   function roomView() {
     const r = state.room;
-    if (!r) return '';
+    // attach() 订阅完就立刻跳这一页，而 state.room 要等 SSE 第一帧才有。
+    // 返回空串的话，微信内置浏览器 + 弱网下用户看到的是一整页空白：零按钮零文字，
+    // 连返回和房号都没有，只能杀进程。给个能看出「在干什么」且退得出去的占位。
+    if (!r) {
+      return `
+        ${U.topbar('连接中…' + (state.code ? ' · 房号 ' + state.code : ''), 'App.goHome()')}
+        <div class="card">
+          <div class="muted">正在连接房间${state.code ? ' ' + esc(state.code) : ''}，网络慢的话要几秒……</div>
+        </div>
+        <button class="btn" onclick="App.goHome()">返回首页</button>`;
+    }
     const price = L.fenToYuan(r.pricePerCardFen);
     const list = S.txList(r).slice().reverse();          // 最新在上
     const net = netOf();
@@ -1104,7 +1135,13 @@ var RunfastRoom = (function () {
         }
         host.saveName(name);
         await attach(v.code, pid);
-      } catch (e) { alert('进入房间失败：' + e.message); }
+      } catch (e) {
+        // 上面的 nameTaken 查的是 preview() 那一刻的快照；用户在这一页停留的十几秒里
+        // 别人同名进了房，只有服务端在写入这一刻才看得见 ⇒ 403。这条路径上的 403 只可能是重名
+        // （清 left/leftAt 走的是自己那条记录，权限恒过），给一条能直接照做的提示。
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('进入房间失败：' + e.message);
+      }
     },
 
     // 退出：只打个 left 标记，玩家和已记的分一笔都不删。
@@ -1192,7 +1229,11 @@ var RunfastRoom = (function () {
       // 旧的（还没接线到 RunfastRoom 的）视图会把新人当成「已离场」——两个数组一起同步。
       if (state.local) { localApply((s) => { s.players.push(name); if (s.activePlayers) s.activePlayers.push(name); }); return; }
       try { await S.patch(state.code, '/players/' + S.newKey('p_'), { name, uid: null, at: Date.now() }); }
-      catch (e) { alert('加人失败：' + e.message); }
+      catch (e) {
+        // 服务端在写入这一刻做最终重名判定（本机看到的房间可能已经旧了几秒）
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('加人失败：' + e.message);
+      }
     },
 
     // 分享：先生成「邀请卡」图片（房号+二维码），弹面板——主按钮把图片走系统分享（牌友收到图直接扫码进房），
@@ -1280,7 +1321,11 @@ var RunfastRoom = (function () {
       if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (S.nameTaken(state.room, next, state.pid)) { alert('房间里已经有人叫这个名字了'); return; }
       try { await S.patch(state.code, '/players/' + state.pid + '/name', next); host.saveName(next); }
-      catch (e) { alert('改名失败：' + e.message); }
+      catch (e) {
+        // 同 confirmJoin：本机的重名判断基于可能已过期的房间快照，服务端才是最终裁决
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('改名失败：' + e.message);
+      }
     },
 
     // ⋯：结算方案随时可看，结束本场谁都能点
@@ -1294,8 +1339,22 @@ var RunfastRoom = (function () {
         items.push({ label: '🚪 退出房间', onclick: 'Room.leave()', danger: true });
       } else {
         items.push({ label: '🚪 回首页', onclick: 'App.goHome()' });
+        // 本地场只能有一个 active，没有出口就锁死了：新开一场、一笔没记就返回首页，
+        // 「开新一场（本地）」从此消失（首页只剩「继续本场」），而「结束本场」又要求至少记过一笔——
+        // 用户只能记一笔假账或清浏览器数据才能脱身。联机场不给这个入口：作废等于删别人的房间，
+        // 本次改版已去房主化，不恢复。
+        items.push({ label: '🗑 作废本场', onclick: 'Room.voidLocal()', danger: true });
       }
       U.openSheet(items);
+    },
+
+    // 作废本场（仅本地场）：整条 session 删掉、不进历史，首页立刻恢复「开新一场（本地）」
+    voidLocal() {
+      if (!state.local || !state.session) return;
+      if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
+      const sid = state.session.id;
+      resetState();   // 用 resetState 不用 close：别把「回到联机房间」的房号也顺手清了
+      host.onVoided(sid);
     },
 
     // 只读地看当前结算方案：结算页在 from==='room' 时每次重绘都现取快照，不存旧数据
@@ -1572,7 +1631,9 @@ var RunfastRoom = (function () {
     </div>`;
 
   // ---------- 导入前校验 ----------
-  const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(s);
+  // id 长度上限跟服务端的 KEY_RE（server.js 的 1~64）对齐：口径不一致时，服务端收下的
+  // tx id / pid 在这里会被判非法，代价是「整份备份一条都导不回来」。
+  const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(s);
   function importValid(data) {
     const names = new Set(data.playerDirectory);
     let activeCount = 0;
@@ -1633,6 +1694,12 @@ var RunfastRoom = (function () {
       if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
     },
     saveLocal() { saveDB(); render(); },
+    // 本场作废（仅本地场）：整条删掉、不进历史，首页随即恢复「开新一场（本地）」
+    onVoided(sid) {
+      db.sessions = db.sessions.filter((x) => x.id !== sid);
+      saveDB();
+      go({ name: 'home' });
+    },
     // 本场结束：快照存进本机历史（幂等），跳结算页
     onFinished(session) {
       const snap = JSON.parse(JSON.stringify(session));

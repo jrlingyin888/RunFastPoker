@@ -9,7 +9,7 @@ var RunfastRoom = (function () {
   // 宿主接线：app.js 启动时注入路由、名录、结束回调
   let host = {
     go() {}, render() {}, view() { return {}; },
-    directory() { return []; }, onFinished() {}, saveName() {}, saveLocal() {},
+    directory() { return []; }, onFinished() {}, onVoided() {}, saveName() {}, saveLocal() {},
   };
   function init(h) { host = Object.assign(host, h); }
 
@@ -48,7 +48,7 @@ var RunfastRoom = (function () {
     const back = !!v.pid;   // 本机在这房间有过身份 → 这页是「确认回来」而不是「新加入」
     const dir = host.directory();
     return `
-      ${U.topbar((back ? '回到房间 ' : '加入房间 ') + esc(v.code), 'App.goHome()')}
+      ${U.topbar((back ? '回到房间 ' : '加入房间 ') + v.code, 'App.goHome()')}
       <div class="card">
         ${back ? `<div class="muted" style="margin-bottom:10px">你之前是「${esc(v.myName)}」，改个名也行，位置和分数不变。</div>` : ''}
         <div class="section-title">你的名字</div>
@@ -159,7 +159,17 @@ var RunfastRoom = (function () {
 
   function roomView() {
     const r = state.room;
-    if (!r) return '';
+    // attach() 订阅完就立刻跳这一页，而 state.room 要等 SSE 第一帧才有。
+    // 返回空串的话，微信内置浏览器 + 弱网下用户看到的是一整页空白：零按钮零文字，
+    // 连返回和房号都没有，只能杀进程。给个能看出「在干什么」且退得出去的占位。
+    if (!r) {
+      return `
+        ${U.topbar('连接中…' + (state.code ? ' · 房号 ' + state.code : ''), 'App.goHome()')}
+        <div class="card">
+          <div class="muted">正在连接房间${state.code ? ' ' + esc(state.code) : ''}，网络慢的话要几秒……</div>
+        </div>
+        <button class="btn" onclick="App.goHome()">返回首页</button>`;
+    }
     const price = L.fenToYuan(r.pricePerCardFen);
     const list = S.txList(r).slice().reverse();          // 最新在上
     const net = netOf();
@@ -357,7 +367,13 @@ var RunfastRoom = (function () {
         }
         host.saveName(name);
         await attach(v.code, pid);
-      } catch (e) { alert('进入房间失败：' + e.message); }
+      } catch (e) {
+        // 上面的 nameTaken 查的是 preview() 那一刻的快照；用户在这一页停留的十几秒里
+        // 别人同名进了房，只有服务端在写入这一刻才看得见 ⇒ 403。这条路径上的 403 只可能是重名
+        // （清 left/leftAt 走的是自己那条记录，权限恒过），给一条能直接照做的提示。
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('进入房间失败：' + e.message);
+      }
     },
 
     // 退出：只打个 left 标记，玩家和已记的分一笔都不删。
@@ -445,7 +461,11 @@ var RunfastRoom = (function () {
       // 旧的（还没接线到 RunfastRoom 的）视图会把新人当成「已离场」——两个数组一起同步。
       if (state.local) { localApply((s) => { s.players.push(name); if (s.activePlayers) s.activePlayers.push(name); }); return; }
       try { await S.patch(state.code, '/players/' + S.newKey('p_'), { name, uid: null, at: Date.now() }); }
-      catch (e) { alert('加人失败：' + e.message); }
+      catch (e) {
+        // 服务端在写入这一刻做最终重名判定（本机看到的房间可能已经旧了几秒）
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('加人失败：' + e.message);
+      }
     },
 
     // 分享：先生成「邀请卡」图片（房号+二维码），弹面板——主按钮把图片走系统分享（牌友收到图直接扫码进房），
@@ -533,7 +553,11 @@ var RunfastRoom = (function () {
       if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (S.nameTaken(state.room, next, state.pid)) { alert('房间里已经有人叫这个名字了'); return; }
       try { await S.patch(state.code, '/players/' + state.pid + '/name', next); host.saveName(next); }
-      catch (e) { alert('改名失败：' + e.message); }
+      catch (e) {
+        // 同 confirmJoin：本机的重名判断基于可能已过期的房间快照，服务端才是最终裁决
+        if (e.status === 403) { alert('这个名字刚被人用了，换一个吧'); return; }
+        alert('改名失败：' + e.message);
+      }
     },
 
     // ⋯：结算方案随时可看，结束本场谁都能点
@@ -547,8 +571,22 @@ var RunfastRoom = (function () {
         items.push({ label: '🚪 退出房间', onclick: 'Room.leave()', danger: true });
       } else {
         items.push({ label: '🚪 回首页', onclick: 'App.goHome()' });
+        // 本地场只能有一个 active，没有出口就锁死了：新开一场、一笔没记就返回首页，
+        // 「开新一场（本地）」从此消失（首页只剩「继续本场」），而「结束本场」又要求至少记过一笔——
+        // 用户只能记一笔假账或清浏览器数据才能脱身。联机场不给这个入口：作废等于删别人的房间，
+        // 本次改版已去房主化，不恢复。
+        items.push({ label: '🗑 作废本场', onclick: 'Room.voidLocal()', danger: true });
       }
       U.openSheet(items);
+    },
+
+    // 作废本场（仅本地场）：整条 session 删掉、不进历史，首页立刻恢复「开新一场（本地）」
+    voidLocal() {
+      if (!state.local || !state.session) return;
+      if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
+      const sid = state.session.id;
+      resetState();   // 用 resetState 不用 close：别把「回到联机房间」的房号也顺手清了
+      host.onVoided(sid);
     },
 
     // 只读地看当前结算方案：结算页在 from==='room' 时每次重绘都现取快照，不存旧数据

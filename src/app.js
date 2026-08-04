@@ -212,7 +212,9 @@
     </div>`;
 
   // ---------- 导入前校验 ----------
-  const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(s);
+  // id 长度上限跟服务端的 KEY_RE（server.js 的 1~64）对齐：口径不一致时，服务端收下的
+  // tx id / pid 在这里会被判非法，代价是「整份备份一条都导不回来」。
+  const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(s);
   function importValid(data) {
     const names = new Set(data.playerDirectory);
     let activeCount = 0;
@@ -273,6 +275,12 @@
       if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
     },
     saveLocal() { saveDB(); render(); },
+    // 本场作废（仅本地场）：整条删掉、不进历史，首页随即恢复「开新一场（本地）」
+    onVoided(sid) {
+      db.sessions = db.sessions.filter((x) => x.id !== sid);
+      saveDB();
+      go({ name: 'home' });
+    },
     // 本场结束：快照存进本机历史（幂等），跳结算页
     onFinished(session) {
       const snap = JSON.parse(JSON.stringify(session));
