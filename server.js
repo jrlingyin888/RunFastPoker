@@ -151,6 +151,13 @@ function canWrite(old, neu, me) {
   if (!me) return false;
   if (old) return false;
   if (!neu || neu.creatorUid !== me) return false;
+  // 单价参与每一次结算，logic.js 一律以「分」（正整数）计算：非整数/负数/缺失都会让
+  // 每个牌友的记分页与战绩图显示「NaN 元」，且这个值一建房就定死、事后改不了。
+  if (!(Number.isInteger(neu.pricePerCardFen) && neu.pricePerCardFen > 0)) return false;
+  // sid / createdAt 会被各端原样快照进本地历史，长期留在别人手机上：限制成合理的字符串。
+  // sid 复用 KEY_RE（客户端本来就是 's'+时间戳），顺带堵死「把 JS 片段塞进 sid」这条老路。
+  if (!(typeof neu.sid === 'string' && KEY_RE.test(neu.sid))) return false;
+  if (!(typeof neu.createdAt === 'string' && neu.createdAt.length <= 64)) return false;
   if (neu.players !== undefined) {
     if (!neu.players || typeof neu.players !== 'object') return false;
     for (const pid of Object.keys(neu.players)) {

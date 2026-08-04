@@ -202,6 +202,14 @@ test('sessionNet：没有 transfers 字段的旧场行为不变', () => {
   ]);
 });
 
+test('sessionSize：旧场按局、新场按笔、升级前开着又接着记的两个都报', () => {
+  assert.equal(L.sessionSize({ rounds: [{}, {}] }), '2 局');                        // 旧场
+  assert.equal(L.sessionSize({ rounds: [], transfers: [{}, {}, {}] }), '3 笔');     // 新场
+  assert.equal(L.sessionSize({ rounds: [{}, {}], transfers: [{}, {}, {}] }), '2 局 3 笔'); // 半场升级后接着记
+  assert.equal(L.sessionSize({ rounds: [], transfers: [] }), '0 笔');               // 空场
+  assert.equal(L.sessionSize({}), '0 笔');                                          // 字段都缺
+});
+
 test('settleUp / summaryText 吃只有 transfers 的场', () => {
   const s = {
     createdAt: '2026-08-03T10:00:00.000Z',

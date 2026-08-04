@@ -94,10 +94,15 @@ var RunfastLogic = (function () {
     return out;
   }
 
-  // 一场的规模文案：旧场按「局」数，新的流水场按「笔」数（新场 rounds 恒为空，不然会显示「共 0 局」）
+  // 一场的规模文案：旧场按「局」数，新的流水场按「笔」数（新场 rounds 恒为空，不然会显示「共 0 局」）。
+  // 升级前开着的半场后来又接着记，两者都有，就两个都报，别把已经记过的那部分藏起来。
   function sessionSize(session) {
     const rounds = (session.rounds || []).length;
-    return rounds ? rounds + ' 局' : (session.transfers || []).length + ' 笔';
+    const tx = (session.transfers || []).length;
+    const parts = [];
+    if (rounds) parts.push(rounds + ' 局');
+    if (tx) parts.push(tx + ' 笔');
+    return parts.join(' ') || '0 笔';
   }
 
   const pad2 = (n) => String(n).padStart(2, '0');

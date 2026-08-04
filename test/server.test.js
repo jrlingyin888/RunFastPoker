@@ -39,15 +39,39 @@ test('injectHostFlag：有占位注释则替换为主机标志脚本，无则原
   assert.equal(injectHostFlag(noPlaceholder), noPlaceholder);
 });
 
+// 建房必带的基础字段（单价/sid/createdAt 都会被服务端校验，见 canWrite）
+const baseRoom = () => ({ creatorUid: 'me', sid: 's1', createdAt: '2026-08-03T10:00:00.000Z', pricePerCardFen: 100 });
+
 test('canWrite：只允许建房，房间已存在则禁止整房覆盖', () => {
-  assert.ok(canWrite(null, { creatorUid: 'me' }, 'me'));
-  assert.ok(!canWrite(null, { creatorUid: 'other' }, 'me'));
-  assert.ok(!canWrite(null, { creatorUid: 'me' }, undefined));
-  assert.ok(!canWrite(sampleRoom(), { creatorUid: 'boss' }, 'boss')); // 房主也不能整房覆盖
+  assert.ok(canWrite(null, baseRoom(), 'me'));
+  assert.ok(!canWrite(null, { ...baseRoom(), creatorUid: 'other' }, 'me'));
+  assert.ok(!canWrite(null, baseRoom(), undefined));
+  assert.ok(!canWrite(sampleRoom(), { ...baseRoom(), creatorUid: 'boss' }, 'boss')); // 房主也不能整房覆盖
+});
+
+test('canWrite：建房时校验单价与 sid/createdAt（缺失/非整数/负数单价一律拒）', () => {
+  const base = baseRoom();
+  // 单价：必须是正整数「分」，否则各端结算页会显示 NaN 元
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: undefined }, 'me'));   // 缺失
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: 0 }, 'me'));           // 0
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: -100 }, 'me'));        // 负数
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: 1.5 }, 'me'));         // 非整数
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: '100' }, 'me'));       // 字符串
+  assert.ok(!canWrite(null, { ...base, pricePerCardFen: NaN }, 'me'));
+  assert.ok(canWrite(null, { ...base, pricePerCardFen: 50 }, 'me'));           // 0.5 元/张，合法
+  // sid：会被各端快照进本地历史，只认 KEY_RE 字符集（堵死往 sid 里塞 JS 片段）
+  assert.ok(!canWrite(null, { ...base, sid: "'); alert(1);//" }, 'me'));
+  assert.ok(!canWrite(null, { ...base, sid: undefined }, 'me'));
+  assert.ok(!canWrite(null, { ...base, sid: 12345 }, 'me'));
+  assert.ok(!canWrite(null, { ...base, sid: 'x'.repeat(65) }, 'me'));
+  // createdAt：字符串且长度合理
+  assert.ok(!canWrite(null, { ...base, createdAt: undefined }, 'me'));
+  assert.ok(!canWrite(null, { ...base, createdAt: 1785830659981 }, 'me'));
+  assert.ok(!canWrite(null, { ...base, createdAt: 'x'.repeat(65) }, 'me'));
 });
 
 test('canWrite：建房时逐个校验 players/tx 内容，不再是只查 creatorUid（评审 Critical 修复）', () => {
-  const base = { creatorUid: 'me' };
+  const base = baseRoom();
   // 没带 players/tx 字段：维持原有宽松行为，不新增「必须带」这条要求
   assert.ok(canWrite(null, { ...base }, 'me'));
   // 合法建房：players/tx 都合法
@@ -200,6 +224,33 @@ test('REST PUT：建房时 players 里带恶意 pid/name（XSS payload）应 403
     assert.equal(r.status, 403);
     const check = await req(port, 'GET', '/rooms/900100');
     assert.equal(check.body, 'null'); // 没有原样存盘
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PUT：单价非整数/负数/缺失的建房应 403，不落盘（否则各端显示 NaN 元）', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    const bad = [
+      ['缺失', (r) => { delete r.pricePerCardFen; return r; }],
+      ['负数', (r) => ({ ...r, pricePerCardFen: -100 })],
+      ['非整数', (r) => ({ ...r, pricePerCardFen: 1.5 })],
+      ['字符串', (r) => ({ ...r, pricePerCardFen: '100' })],
+      ['sid 带 JS 片段', (r) => ({ ...r, sid: "'); alert(1);//" })],
+    ];
+    let code = 910100;
+    for (const [label, mutate] of bad) {
+      const room = mutate({ ...sampleRoom() });
+      const path = '/rooms/' + (code++);
+      const r = await req(port, 'PUT', path, room, { 'X-Device-Id': 'boss' });
+      assert.equal(r.status, 403, label + ' 应被拒');
+      const check = await req(port, 'GET', path);
+      assert.equal(check.body, 'null', label + ' 不应落盘');
+    }
+    // 合法单价照常建房成功
+    const ok = await req(port, 'PUT', '/rooms/910200', { ...sampleRoom(), pricePerCardFen: 50 }, { 'X-Device-Id': 'boss' });
+    assert.equal(ok.status, 200);
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 

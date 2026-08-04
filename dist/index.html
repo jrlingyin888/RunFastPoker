@@ -222,10 +222,15 @@ var RunfastLogic = (function () {
     return out;
   }
 
-  // 一场的规模文案：旧场按「局」数，新的流水场按「笔」数（新场 rounds 恒为空，不然会显示「共 0 局」）
+  // 一场的规模文案：旧场按「局」数，新的流水场按「笔」数（新场 rounds 恒为空，不然会显示「共 0 局」）。
+  // 升级前开着的半场后来又接着记，两者都有，就两个都报，别把已经记过的那部分藏起来。
   function sessionSize(session) {
     const rounds = (session.rounds || []).length;
-    return rounds ? rounds + ' 局' : (session.transfers || []).length + ' 笔';
+    const tx = (session.transfers || []).length;
+    const parts = [];
+    if (rounds) parts.push(rounds + ' 局');
+    if (tx) parts.push(tx + ' 笔');
+    return parts.join(' ') || '0 笔';
   }
 
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -910,8 +915,12 @@ var RunfastRoom = (function () {
       + '<button class="icon-btn" onclick="Room.more()">⋯</button>';
     const bar = state.local ? ''
       : `<div class="sync-bar"><span><span class="sync-dot ${state.status === 'connected' ? '' : 'off'}"></span>房号 ${esc(state.code)} · ${S.playingCount(r)} 人在玩</span></div>`;
+    // 升级前记的半场本地牌局只有 rounds 没有 transfers：只数 tx 会显示「已记 0 笔」，
+    // 而头像上明明有分，看着像分丢了。本地场一律交给 sessionSize 按「局/笔」算。
+    const oldRounds = state.local ? (state.session.rounds || []).length : 0;
+    const size = state.local ? L.sessionSize(state.session) : S.txList(r).length + ' 笔';
     return `
-      ${U.topbar('已记 ' + S.txList(r).length + ' 笔 · ' + price + '元/张', state.local ? 'App.goHome()' : '', actions)}
+      ${U.topbar('已记 ' + size + ' · ' + price + '元/张', state.local ? 'App.goHome()' : '', actions)}
       ${bar}
       <div class="card">
         <div class="players">
@@ -923,7 +932,8 @@ var RunfastRoom = (function () {
       </div>
       <div class="tip">谁赢了就点谁的头像${state.local ? '' : ' · 点自己头像改名或退出'}</div>
       <div class="card">
-        ${list.map(txRowHtml).join('') || '<div class="muted">还没有记录，谁赢了就点谁的头像</div>'}
+        ${list.map(txRowHtml).join('') || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
+        ${oldRounds ? `<div class="muted">这一场升级前按「局」记过 ${oldRounds} 局，分已经算进上面的头像里；从现在起每记一笔都会列在这里。</div>` : ''}
       </div>`;
   }
 
@@ -935,22 +945,32 @@ var RunfastRoom = (function () {
     state.payTo = null;
     // payFrom 故意不清：本地单机没有「我」，下次开支出框要沿用这次选的付款人（见 openPay 的注释）
   }
-  function openPay(toPid) {
+  // 能当付款人的：不是收款人自己、且没退出。排序口径和 pickPayer 一致（按加入时间），
+  // 否则兜底挑的人和面板上第一个人不是同一个，看着像随机的。
+  function payerCandidates(toPid) {
+    const ps = state.room.players;
+    return Object.keys(ps)
+      .filter((pid) => pid !== toPid && !ps[pid].left)
+      .sort((a, b) => (ps[a].at || 0) - (ps[b].at || 0));
+  }
+  // preselect === false：从「有人给我记分」进来的。收款人是我、付款人只能是别人，
+  // 而这一步正是用户要做的选择；替他默认选一个，输个数字点「支出」就把分记到别人头上了，
+  // 流水又只增不删（只能反向再记一笔冲掉）。这条路径要求先显式点一次选人。
+  function openPay(toPid, preselect) {
+    const cands = payerCandidates(toPid);
+    if (!cands.length) { alert('房间里还没有别人，先加个人吧'); return; }
     state.payTo = toPid;
     // 联机默认「我付」；本地单机没有「我」，沿用上次选的付款人（由 closePay 保留）
     if (!state.local) state.payFrom = state.pid;
     const fromOk = state.payFrom && state.payFrom !== toPid
       && state.room.players[state.payFrom] && !state.room.players[state.payFrom].left;
-    if (!fromOk) {
-      state.payFrom = Object.keys(state.room.players)
-        .find((pid) => pid !== toPid && !state.room.players[pid].left) || null;
-    }
-    if (!state.payFrom) { alert('房间里还没有别人，先加个人吧'); return; }
+    if (!fromOk) state.payFrom = preselect === false ? null : cands[0];
     renderPay();
   }
   function renderPay() {
     const r = state.room;
-    const from = r.players[state.payFrom], to = r.players[state.payTo];
+    const from = state.payFrom ? r.players[state.payFrom] : null;  // 还没选付款人时为 null
+    const to = r.players[state.payTo];
     const keep = (document.getElementById('payPoints') || {}).value || '';
     let el = document.getElementById('pay');
     if (!el) {
@@ -963,8 +983,11 @@ var RunfastRoom = (function () {
       <button class="pay-x" onclick="Room.closePay()">×</button>
       <div class="pay-head">
         <button class="pay-who" onclick="Room.pickPayer()">
-          <span class="ava" style="background:${U.avatarColor(from.name)}">${esc(U.initial(from.name))}</span>
-          <span class="nm">${esc(from.name)} ▾</span><span class="muted">点这里换人</span>
+          ${from
+            ? `<span class="ava" style="background:${U.avatarColor(from.name)}">${esc(U.initial(from.name))}</span>
+               <span class="nm">${esc(from.name)} ▾</span><span class="muted">点这里换人</span>`
+            : `<span class="ava" style="background:#9ca3af">?</span>
+               <span class="nm">选择付款人 ▾</span><span class="muted">点这里选人</span>`}
         </button>
         <div class="pay-arrow"><div>支出 分数</div><div>→</div></div>
         <div class="pay-who">
@@ -975,7 +998,7 @@ var RunfastRoom = (function () {
       <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出分数"
              value="${esc(keep)}" oninput="Room.previewPay(this.value)">
       <div class="muted pay-hint" id="payHint">${payHint(keep)}</div>
-      <button class="btn btn-primary" onclick="Room.submitPay()">支出</button>
+      <button class="btn btn-primary" ${from ? '' : 'disabled style="opacity:.4"'} onclick="Room.submitPay()">支出</button>
     </div>`;
     const inp = document.getElementById('payPoints');
     if (inp) inp.focus();
@@ -1113,13 +1136,10 @@ var RunfastRoom = (function () {
     },
     pickPayer() {
       const r = state.room;
-      const items = Object.keys(r.players)
-        .filter((pid) => !r.players[pid].left && pid !== state.payTo)
-        .sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0))
-        .map((pid) => ({
-          label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
-          data: { 'room-act': 'payer', pid },
-        }));
+      const items = payerCandidates(state.payTo).map((pid) => ({
+        label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
+        data: { 'room-act': 'payer', pid },
+      }));
       U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
     },
     setPayer(pid) { state.payFrom = pid; renderPay(); },
@@ -1132,6 +1152,7 @@ var RunfastRoom = (function () {
       }
       const ps = state.room.players;
       const from = state.payFrom, to = state.payTo;
+      if (!from) { alert('先点上面的头像选一下：这笔分是谁支出的'); return; }
       // 弹窗开着的这段时间房间可能变了（对方退出、甚至联机端收到别的设备的广播）——提交前复查一遍，
       // 不能光信弹窗打开那一刻缓存的 from/to 还有效。
       if (!ps[from] || ps[from].left || !ps[to] || ps[to].left) {
@@ -1248,8 +1269,8 @@ var RunfastRoom = (function () {
         { label: '🚪 退出房间', onclick: 'Room.leave()', danger: true },
       ], `<div class="sheet-head">${esc(p.name)}</div>`);
     },
-    // 收款人是我，付款人由 openPay 自动挑一个别人（可在弹窗里换）
-    payMe() { openPay(state.pid); },
+    // 收款人是我；付款人不预选，必须自己点一次（记一笔就删不掉，见 openPay 的注释）
+    payMe() { openPay(state.pid, false); },
 
     async rename() {
       if (state.local) { alert('本地单机没有「我」，改名请点那个人的头像旁边的加人重来'); return; }
@@ -1283,7 +1304,11 @@ var RunfastRoom = (function () {
     },
 
     async finish() {
-      if (!S.txList(state.room).length) { alert('还没记过分，不能结算'); return; }
+      // 升级前按「局」记的半场本地牌局只有 rounds 没有 tx。只看 tx 会把它判成「没记过分」而拒绝结算，
+      // 于是它永远停在 active：首页永远显示「继续本场」、永远开不了新的本地场，且流水只增不删，
+      // 用户只能靠记一笔假账脱身。本地场必须把 rounds 也算上（联机场没有 rounds，不受影响）。
+      const hasOldRounds = state.local && (state.session.rounds || []).length > 0;
+      if (!S.txList(state.room).length && !hasOldRounds) { alert('还没记过分，不能结算'); return; }
       if (!confirm('结束本场后不能再记分，确定吗？')) return;
       if (state.local) {
         localApply((s) => { s.status = 'finished'; s.finishedAt = new Date().toISOString(); });
