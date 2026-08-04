@@ -39,7 +39,7 @@ var RunfastShare = (function () {
     ctx.fillText('🃏 跑得快战绩', W / 2, 72);
     ctx.fillStyle = 'rgba(255,255,255,.65)';
     font(400, 24);
-    ctx.fillText(dateStr + ' · 共 ' + session.rounds.length + ' 局 · ' + L.fenToYuan(session.pricePerCardFen) + '元/张', W / 2, 116);
+    ctx.fillText(dateStr + ' · 共 ' + L.sessionSize(session) + ' · ' + L.fenToYuan(session.pricePerCardFen) + '元/张', W / 2, 116);
     ctx.strokeStyle = 'rgba(255,255,255,.25)';
     ctx.beginPath(); ctx.moveTo(PAD, 150); ctx.lineTo(W - PAD, 150); ctx.stroke();
 

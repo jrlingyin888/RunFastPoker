@@ -128,10 +128,12 @@ var RunfastRoom = (function () {
       : (!state.local && pid === state.pid) ? '<span class="me-tag">我</span>'
       : (!state.local && p.uid == null) ? '<span class="proxy-tag">代</span>' : '';
     const sign = points > 0 ? '+' : '';
+    // 身份小药丸单独一行：座位只有 64px 宽，名字那行是 nowrap+省略号，
+    // 塞在名字后面会被整个裁掉（「丽叶已退出」只剩「丽叶…」，看不出为什么是灰的）
     return `<button class="seat${left ? ' left' : ''}${(!state.local && pid === state.pid) ? ' me' : ''}"
         data-room-act="seat" data-pid="${esc(pid)}">
       <span class="ava" style="background:${U.avatarColor(p.name)}">${esc(U.initial(p.name))}</span>
-      <span class="nm">${esc(p.name)}${tag}</span>
+      <span class="nm">${esc(p.name)}</span>${tag}
       <span class="pts ${points > 0 ? 'pos' : points < 0 ? 'neg' : ''}">${sign}${points}</span>
     </button>`;
   }
@@ -493,14 +495,19 @@ var RunfastRoom = (function () {
       alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + state.code);
     },
 
-    // 点自己头像：改昵称 / 退出房间
+    // 点自己头像：替别人记一笔给我 / 改昵称 / 退出房间
     mePanel() {
       const p = state.room.players[state.pid];
       U.openSheet([
+        // 「谁赢了点谁的头像」记的是「我付给 TA」，自己赢了就得由输的人点。可输的人不一定有手机
+        // （＋加进来的代记玩家），或干脆只有我这一台设备在记——没有这个入口就永远记不上自己赢的分。
+        { label: '💰 有人给我记分', onclick: 'Room.payMe()' },
         { label: '✏️ 更新昵称', onclick: 'Room.rename()' },
         { label: '🚪 退出房间', onclick: 'Room.leave()', danger: true },
       ], `<div class="sheet-head">${esc(p.name)}</div>`);
     },
+    // 收款人是我，付款人由 openPay 自动挑一个别人（可在弹窗里换）
+    payMe() { openPay(state.pid); },
 
     async rename() {
       if (state.local) { alert('本地单机没有「我」，改名请点那个人的头像旁边的加人重来'); return; }

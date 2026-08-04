@@ -87,6 +87,8 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .seat .nm { display: block; font-size: 12px; line-height: 1.4; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .seat .pts { display: block; font-size: 13px; font-weight: 800; }
+/* 座位里的身份药丸自成一行（名字那行放不下），去掉挨着名字用的左边距 */
+.seat .me-tag, .seat .proxy-tag, .seat .left-tag { margin-left: 0; }
 .seat.me .ava { box-shadow: 0 0 0 2px var(--gold); }
 .seat.left { opacity: .45; }
 .left-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 999px;

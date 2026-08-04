@@ -94,6 +94,12 @@ var RunfastLogic = (function () {
     return out;
   }
 
+  // 一场的规模文案：旧场按「局」数，新的流水场按「笔」数（新场 rounds 恒为空，不然会显示「共 0 局」）
+  function sessionSize(session) {
+    const rounds = (session.rounds || []).length;
+    return rounds ? rounds + ' 局' : (session.transfers || []).length + ' 笔';
+  }
+
   const pad2 = (n) => String(n).padStart(2, '0');
 
   // 战绩纯文本（复制到聊天工具）
@@ -101,7 +107,7 @@ var RunfastLogic = (function () {
     const d = new Date(session.createdAt);
     const lines = [];
     lines.push('【跑得快战绩】' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
-    lines.push('共 ' + session.rounds.length + ' 局 · ' + fenToYuan(session.pricePerCardFen) + '元/张');
+    lines.push('共 ' + sessionSize(session) + ' · ' + fenToYuan(session.pricePerCardFen) + '元/张');
     lines.push('— 盈亏 —');
     sessionNet(session)
       .slice().sort((a, b) => b.fen - a.fen)
@@ -114,7 +120,7 @@ var RunfastLogic = (function () {
     return lines.join('\n');
   }
 
-  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, transferNet, sessionNet, settleUp, summaryText };
+  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, transferNet, sessionNet, settleUp, sessionSize, summaryText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
-  const L = RunfastLogic;
-  const U = RunfastUI;
+  const L = RunfastLogic, U = RunfastUI, R = RunfastRoom;
+  const esc = U.esc, topbar = U.topbar, validName = U.validName;
   const STORE_KEY = 'runfast.v1';
 
   // ---------- 存储 ----------
@@ -37,63 +37,6 @@
   };
   const activeSession = () => db.sessions.find((s) => s.status === 'active') || null;
 
-  // ---------- 联机状态（Task 5 接线；本地模式恒 inactive） ----------
-  const online = { active: false, code: null, room: null, status: 'idle', uid: null, presence: [], myOwn: null };
-  function sessionCtx() { return online.active ? online.room.session : activeSession(); }
-
-  // 联机派生态：座位/房主/我坐哪些座/本局参与座位/是否坐满
-  const isOwner = () => !!(online.room && online.room.creatorUid === online.uid);
-  const seatsOf = () => (online.room && online.room.seats) || [];
-  const mySeatIdx = () => seatsOf().reduce((a, s, i) => (s.claimedBy === online.uid ? (a.push(i), a) : a), []);
-  const isSeated = () => mySeatIdx().length > 0;
-  const activeIdx = () => {
-    const s = online.room && online.room.session;
-    if (!s) return [];
-    return seatsOf().reduce((a, seat, i) => (s.activePlayers.includes(seat.name) ? (a.push(i), a) : a), []);
-  };
-  const allClaimed = () => seatsOf().length > 0 && seatsOf().every((s) => s.claimedBy);
-  // 我坐着的那些座位对应的名字（一台设备可代占多座，故是集合）
-  const myNames = () => new Set(mySeatIdx().map((i) => seatsOf()[i].name));
-  // 「本人」座位：一台设备可代占多座，只有第一个入座的记为「我」，其余记为「代」。名字存本机、按房号，刷新/重进仍记得。
-  const myOwnKey = (code) => 'runfast.me.' + code;
-  function loadMyOwn(code) { try { return localStorage.getItem(myOwnKey(code)) || null; } catch (e) { return null; } }
-  function saveMyOwn(code, name) { try { name ? localStorage.setItem(myOwnKey(code), name) : localStorage.removeItem(myOwnKey(code)); } catch (e) { /* 忽略 */ } }
-  // 我当前的「本人」座位名字：存的那个我还占着才算数；否则视为未定（不标「我」）
-  const myOwnName = () => {
-    const held = mySeatIdx();
-    if (!held.length) return null;                                 // 没坐 → 无「我」
-    const n = online.myOwn;
-    if (n && held.some((i) => seatsOf()[i].name === n)) return n;  // 明确记过且还占着 → 就是它
-    return seatsOf()[held[0]].name;                               // 回退：我持有的第一个（下标最小）座位记为「我」
-  };
-  // 名字后跟的身份小药丸：本人→「我」，我代占的→「代」，其余→无
-  function idTag(name) {
-    if (!online.active) return '';
-    if (name === myOwnName()) return ' <span class="me-tag">我</span>';
-    if (myNames().has(name)) return ' <span class="proxy-tag">代</span>';
-    return '';
-  }
-  // 联机下改动「已保存的一局」/玩家管理走 canEdit（房主，或房主开启「允许他人修改」后持座者）；记分阶段用协作草稿，与此无关。
-  async function commitSession(mutator) {
-    if (online.active) {
-      if (!RunfastSync.canEdit(online.room, online.uid)) { alert('房主未开启「允许他人修改」，暂不能改动'); render(); return; }
-      try {
-        await RunfastSync.mutate(online.code, (room) => {
-          mutator(room.session);
-          room.updatedAt = Date.now();
-          return room;
-        });
-      } catch (e) { alert('同步失败，请检查网络后重试'); }
-    } else {
-      mutator(activeSession());
-      saveDB();
-      render();
-    }
-  }
-
-
-
-
   // ---------- 导航与渲染 ----------
   let view = { name: 'home' };
   function go(v) { U.closeSheet(); view = v; render(); window.scrollTo(0, 0); }
@@ -107,8 +50,8 @@
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
-      ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${U.esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
-      ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(U.esc).join('、')}）</button><div class="gap"></div>` : ''}
+      ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
+      ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
       <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
       <div class="gap"></div>
       <button class="btn" onclick="App.goJoinRoom()">加入联机场</button>
@@ -127,282 +70,104 @@
 
   // ---------- 开新一场 / 创建联机场（同一张表单，按 view.mode 换文案） ----------
   VIEWS.setup = () => {
-    const sel = view.sel;
-    const dir = db.playerDirectory;
     const isOnline = view.mode === 'online';
+    const dir = db.playerDirectory;
+    // 注意：路由对象上的 name 是视图名，用户输入的名字存在 myName 上
     return `
-      ${U.topbar(isOnline ? '创建联机场' : '开新一场', 'App.goHome()')}
+      ${topbar(isOnline ? '创建联机场' : '开新一场（本地）', 'App.goHome()')}
       <div class="card">
         <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
-          <span>选择玩家（2～8 人）</span>
+          <span>${isOnline ? '你的名字' : '这一场有谁'}</span>
           ${dir.length ? `<button class="btn btn-sm" onclick="App.toggleManage()">${view.manage ? '完成' : '管理名录'}</button>` : ''}
         </div>
         ${view.manage
-          ? dir.map((n) => `<div class="row"><span>${U.esc(n)}</span>
+          ? dir.map((n) => `<div class="row"><span>${esc(n)}</span>
               <div style="flex-shrink:0">
-                <button class="btn btn-sm" onclick="App.renameDirName('${U.esc(n)}')">改名</button>
-                <button class="btn btn-sm" onclick="App.deleteDirName('${U.esc(n)}')">删除</button>
+                <button class="btn btn-sm" onclick="App.renameDirName('${esc(n)}')">改名</button>
+                <button class="btn btn-sm" onclick="App.deleteDirName('${esc(n)}')">删除</button>
               </div></div>`).join('') +
             '<div class="muted" style="margin-top:8px">改名/删除只影响这里的常用名单，不影响历史战绩。</div>'
-          : `<div class="chips">
-              ${dir.map((n) =>
-                `<button class="chip ${sel.includes(n) ? 'on' : ''}" onclick="App.togglePlayer('${U.esc(n)}')">${U.esc(n)}</button>`).join('')
-              || '<span class="muted">还没有常用玩家，在下面添加第一位吧</span>'}
-            </div>`}
-        <div style="display:flex;gap:8px;margin-top:12px">
-          <input type="text" id="newName" placeholder="新玩家名字（8 字以内）" maxlength="8">
-          <button class="btn btn-sm" onclick="App.addPlayer()">添加</button>
-        </div>
-        ${sel.length ? `<div class="muted" style="margin-top:10px">已选 ${sel.length} 人：${sel.map(U.esc).join('、')}</div>` : ''}
-        ${isOnline ? '<div class="muted" style="margin-top:10px">这里选的人就是房间里的座位。建好后把二维码发给牌友，他们扫码认领自己的名字；没带手机的人你可以替 TA 入座。</div>' : ''}
+          : `<input type="text" id="myName" maxlength="8" placeholder="${isOnline ? '输入你的名字（8 字以内）' : '玩家名字（8 字以内）'}" value="${esc(view.myName || '')}">
+             ${dir.length ? `<div class="chips" style="margin-top:10px">${dir.map((n) =>
+               `<button class="chip ${!isOnline && view.sel.includes(n) ? 'on' : ''}" onclick="App.pickName('${esc(n)}')">${esc(n)}</button>`).join('')}</div>` : ''}
+             ${isOnline
+               ? '<div class="muted" style="margin-top:10px">建好后把二维码发给牌友，他们扫码进来自己输名字。没带手机的人，进去以后点「＋加人」补上。</div>'
+               : `<div style="margin-top:10px"><button class="btn btn-sm" onclick="App.addLocalPlayer()">加入这一场</button></div>
+                  ${view.sel.length ? `<div class="muted" style="margin-top:10px">本场玩家（${view.sel.length}）：${view.sel.map(esc).join('、')}</div>` : ''}`}`}
       </div>
       <div class="card">
         <div class="section-title">每张牌单价（元）</div>
-        <input type="text" id="price" inputmode="decimal" value="${U.esc(view.price)}" placeholder="如 1 或 0.5">
+        <input type="text" id="price" inputmode="decimal" value="${esc(view.price)}" placeholder="如 1 或 0.5">
       </div>
       <button class="btn btn-primary" onclick="App.startSession()">${isOnline ? '创建房间' : '开始记分'}</button>`;
   };
 
-  // ---------- 记分主页 ----------
-  // from：这一行是在哪个页面渲染的（'rounds' = 明细页），决定改完之后回哪
-  function roundRow(s, r, i, readonly, from) {
+  // 历史旧场的每局明细（新场是流水，不再有「局」）
+  function roundRow(s, r, i) {
     const detail = L.roundTransfers(r, s.pricePerCardFen)
-      .map((t) => `${U.esc(t.from)} ${t.cards}张`).join('，');
+      .map((t) => `${esc(t.from)} ${t.cards}张`).join('，');
     return `<div class="row">
-      <div><b>第${i + 1}局</b> ${U.esc(r.winner)} 赢${r.at ? ` <span class="muted">${fmtTime(r.at)}</span>` : ''}
+      <div><b>第${i + 1}局</b> ${esc(r.winner)} 赢${r.at ? ` <span class="muted">${fmtTime(r.at)}</span>` : ''}
         <div class="muted">${detail || '其他人也都出完了'}</div></div>
-      ${readonly ? '' : `<div style="flex-shrink:0">
-        <button class="btn btn-sm" onclick="App.editRound('${r.id}','${from || 'session'}')">改</button>
-        <button class="btn btn-sm" onclick="App.deleteRound('${r.id}')">删</button></div>`}
     </div>`;
   }
 
-  VIEWS.session = () => {
-    const s = sessionCtx();
-    if (!s) return VIEWS.home();
-    const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
-    const scoreCard = `<div class="card">
-      ${net.map((p) => `<div class="row">
-        <span>${U.esc(p.name)}${idTag(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
-        <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
-      </div>`).join('')}</div>`;
-    const detailEntry = s.rounds.length
-      ? `<button class="btn" style="margin-top:12px" onclick="App.goRounds('${s.id}','session')">查看每局明细（${s.rounds.length} 局） ›</button>`
-      : `<div class="card" style="margin-top:12px"><div class="muted">还没有记录${online.active ? '，在上面记这一局' : '，点上面「记一局」开始'}</div></div>`;
-    // 打完就结算：能结算的人（本地自己 / 联机房主）直接在页脚点，不用再翻「⋯」菜单；没记过局时不显示
-    const settleEntry = s.rounds.length && (!online.active || isOwner())
-      ? `<button class="btn btn-ghost" style="margin-top:12px" onclick="App.finishSession()">💰 结算本场</button>`
-      : '';
-
-    if (online.active) {
-      return `
-        ${U.topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
-        ${onlineBar()}
-        ${scoreCard}
-        ${emptySeatClaimCard()}
-        ${draftCard()}
-        ${detailEntry}
-        ${settleEntry}`;
-    }
-    // 本地单机
-    return `
-      ${U.topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()', topActions(false))}
-      ${scoreCard}
-      <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
-      ${detailEntry}
-      ${settleEntry}`;
-  };
-
-  // 记分阶段的空座认领：本局在场但没人坐的座位（本人离开又回来、或换人接手），谁都能点着接手 TA 那格，分数按名字继承。
-  function emptySeatClaimCard() {
-    const seats = seatsOf();
-    const empties = activeIdx().filter((i) => !seats[i].claimedBy);
-    if (!empties.length) return '';
-    return `<div class="card">
-      <div class="section-title">空座待认领</div>
-      <div class="muted" style="margin-bottom:8px">这些位置暂时没人记分。回来的人点自己名字接着记；也可由别人接手，继续记 TA 的分。</div>
-      <div class="chips">${empties.map((i) =>
-        `<button class="chip" onclick="App.claimSeat(${i})">坐「${U.esc(seats[i].name)}」的位置</button>`).join('')}</div>
-    </div>`;
+  // ---------- 结算页（记分页「⋯ → 结算方案」& 结束本场后 & 历史详情共用） ----------
+  // 结算页看的可能是「房间的当前快照」（随时可看，实时），也可能是「历史里的一场」
+  function settleSession() {
+    if (view.from === 'room') return R.state.active ? R.snapshot() : null;
+    return db.sessions.find((x) => x.id === view.sid);
   }
 
-  // 房主/持座人「代填」默认收起，手动点开的座位下标记在这里；每开新一局自动清空
-  const draftOpen = new Set();
-
-  // 联机协作草稿：赢家先定 → 各座各填「剩几张」并点确认 → 全部确认后自动记录本局（房主端提交）
-  function draftCard() {
-    const room = online.room;
-    const seats = seatsOf();
-    const idxs = activeIdx();                 // 本局参与的座位下标
-    const draft = room.draft || { winner: null, entries: {} };
-    const mine = new Set(mySeatIdx());
-    const owner = isOwner();
-    const canFill = (i) => mine.has(i) || owner;
-
-    // 1) 谁赢了（新一局开始：收起所有「代填」展开态）
-    if (draft.winner == null) {
-      draftOpen.clear();
-      return `<div class="card">
-        <div class="section-title">这一局 · 谁赢了？（赢的人点自己）</div>
-        <div class="chips">${idxs.map((i) =>
-          `<button class="chip" onclick="App.draftPickWinner(${i})">${U.esc(seats[i].name)}${idTag(seats[i].name)}</button>`).join('')}</div>
-        <div class="muted" style="margin-top:8px">${isSeated() || owner ? '赢家先点，其余各自填「剩几张」并确认，全部确认后自动记这一局。' : '观战中，看大家记分即可'}</div>
-      </div>`;
-    }
-
-    // 2) 各座各填并确认
-    const losers = idxs.filter((i) => i !== draft.winner);
-    const doneCount = losers.filter((i) => draft.entries[i] && draft.entries[i].confirmed).length;
-    const rows = losers.map((i) => {
-      const e = draft.entries[i];
-      const filled = e && typeof e.cardsLeft === 'number';
-      const done = !!(e && e.confirmed);
-      const isMine = mine.has(i);
-      const expanded = isMine || draftOpen.has(i);   // 自己的座位常驻展开；代填座位点开才展开
-
-      // 收起态：紧凑状态行。房主/持座人可点「代填/改」就地展开去填。
-      if (!expanded) {
-        const status = done
-          ? ('✓ ' + e.cardsLeft + ' 张' + (e.shutout ? '（全关）' : ''))
-          : (filled ? (e.cardsLeft + ' 张 · 待确认') : '填写中…');
-        const openBtn = canFill(i)
-          ? `<button class="btn btn-sm" style="margin-left:10px" onclick="App.draftOpenSeat(${i})">${filled ? '改' : '代填'}</button>`
-          : '';
-        return `<div class="row"><span>${U.esc(seats[i].name)}</span>
-          <span><span class="${done ? 'pos' : 'muted'}">${status}</span>${openBtn}</span></div>`;
-      }
-
-      // 展开态：完整数字键盘（代填座位多一个「收起」）
-      const v = filled ? e.cardsLeft : -1;
-      const shutBadge = v === 10
-        ? `<button class="badge" ${e.shutout ? '' : 'style="background:#e5e7eb;color:#374151"'} onclick="App.draftToggleShutout(${i})">${e.shutout ? '全关 ×2（点此取消）' : '全关已取消（点此恢复）'}</button>`
-        : '';
-      const collapseBtn = isMine ? '' : `<button class="btn btn-sm" style="margin-left:8px" onclick="App.draftCloseSeat(${i})">收起</button>`;
-      return `<div class="card"${done ? ' style="opacity:.7"' : ''}>
-        <div class="section-title">${U.esc(seats[i].name)}${seats[i].name === myOwnName() ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}${collapseBtn}</div>
-        <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
-          `<button class="${v === k ? 'on' : ''}" onclick="App.draftFill(${i},${k})">${k}</button>`).join('')}</div>
-        <button class="btn ${done ? '' : 'btn-primary'}" style="margin-top:10px" ${filled ? '' : 'disabled style="opacity:.4"'} onclick="App.draftConfirm(${i})">
-          ${done ? '✓ 已确认（点此修改）' : '确认这格'}</button>
-      </div>`;
-    }).join('');
-
-    return `<div class="card">
-      <div class="section-title">这一局 · ${U.esc(seats[draft.winner].name)} 赢${(isSeated() || owner) ? ' <button class="btn btn-sm" onclick="App.draftPickWinner(null)">改赢家</button>' : ''}</div>
-      <div class="muted">赢家 0 张；其余各自填「剩几张」并点确认。已确认 ${doneCount}/${losers.length} 人，全部确认后自动记这一局。</div>
-    </div>
-    ${rows}`;
-  }
-
-  // ---------- 记一局 ----------
-  function currentLosers() {
-    return view.participants
-      .filter((n) => n !== view.winner)
-      .map((n) => ({
-        name: n,
-        cardsLeft: view.cards[n],
-        shutout: view.cards[n] === 10 && !view.shutoutOff[n],
-      }));
-  }
-
-  VIEWS.record = () => {
-    const s = sessionCtx();
-    const ps = view.participants;
-    const w = view.winner;
-    const losers = ps.filter((n) => n !== w);
-    const ready = w && losers.every((n) => typeof view.cards[n] === 'number');
-    let previewHtml = '';
-    if (ready) {
-      const ts = L.roundTransfers({ winner: w, losers: currentLosers() }, s.pricePerCardFen);
-      previewHtml = `<div class="card"><div class="section-title">本局结算预览</div>
-        ${ts.map((t) => `<div class="row"><span>${U.esc(t.from)} → ${U.esc(t.to)}</span><span>${t.cards} 张 · ${yuan(t.fen)} 元</span></div>`).join('')
-          || '<div class="muted">其他人都 0 张，本局无转账</div>'}</div>`;
-    }
-    return `
-      ${U.topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.cancelRecord()')}
-      <div class="card">
-        <div class="section-title">1️⃣ 谁赢了？</div>
-        <div class="chips">${ps.map((n) =>
-          `<button class="chip ${w === n ? 'on' : ''}" onclick="App.pickWinner('${U.esc(n)}')">${U.esc(n)}</button>`).join('')}</div>
-      </div>
-      ${w ? losers.map((n) => {
-        const v = view.cards[n];
-        const shutBadge =
-          v === 10 && !view.shutoutOff[n]
-            ? `<button class="badge" onclick="App.toggleShutout('${U.esc(n)}')">全关 ×2（点此取消）</button>`
-            : v === 10
-              ? `<button class="badge" style="background:#e5e7eb;color:#374151" onclick="App.toggleShutout('${U.esc(n)}')">全关已取消（点此恢复）</button>`
-              : '';
-        return `<div class="card">
-          <div class="section-title">${U.esc(n)} 剩几张？ ${shutBadge}</div>
-          <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
-            `<button class="${v === k ? 'on' : ''}" onclick="App.pickCards('${U.esc(n)}',${k})">${k}</button>`).join('')}</div>
-        </div>`;
-      }).join('') : ''}
-      ${previewHtml}
-      <button class="btn btn-primary" ${ready ? '' : 'disabled style="opacity:.4"'} onclick="App.saveRound()">
-        ${view.editId ? '保存修改' : '✅ 确认保存'}</button>`;
-  };
-
-  // ---------- 结算页（结算本场后 & 历史详情共用） ----------
   VIEWS.settle = () => {
-    const s = db.sessions.find((x) => x.id === view.sid);
-    const backJs = view.from === 'history' ? 'App.goHistory()' : 'App.goHome()';
+    const s = settleSession();
+    if (!s) return VIEWS.home();
+    const backJs = view.from === 'history' ? 'App.goHistory()'
+      : view.from === 'room' ? 'App.backToRoom()' : 'App.goHome()';
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     const pays = L.settleUp(L.sessionNet(s));
     return `
-      ${U.topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
+      ${topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
       <div class="card">
-        <div class="section-title">最终盈亏（${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张）</div>
-        ${net.map((p) => `<div class="row"><span>${U.esc(p.name)}</span>
+        <div class="section-title">${view.from === 'room' ? '当前' : '最终'}盈亏（${L.sessionSize(s)} · ${yuan(s.pricePerCardFen)}元/张）</div>
+        ${net.map((p) => `<div class="row"><span>${esc(p.name)}</span>
           <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span></div>`).join('')}
       </div>
       <div class="card">
         <div class="section-title">💸 转账方案（最少笔数）</div>
-        ${pays.map((t) => `<div class="row"><span>${U.esc(t.from)} 转给 ${U.esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
+        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 转给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
           || '<div class="muted">全部打平，无需转账</div>'}
       </div>
-      <button class="btn btn-primary" onclick="App.shareImage('${s.id}')">📤 分享战绩图</button>
+      <button class="btn btn-primary" onclick="App.shareImage()">📤 分享战绩图</button>
       <div class="gap"></div>
-      <button class="btn" onclick="App.copyText('${s.id}')">📋 复制战绩文字</button>
-      <div class="gap"></div>
-      <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>
-      ${RunfastRoom.state.code && RunfastRoom.state.room
-        && RunfastRoom.state.room.creatorUid === RunfastRoom.state.uid
-        && RunfastRoom.state.room.sid === s.id ? `<div class="gap"></div>
+      <button class="btn" onclick="App.copyText()">📋 复制战绩文字</button>
+      ${s.rounds && s.rounds.length
+        ? '<div class="gap"></div><button class="btn" onclick="App.goRoundsFromSettle()">查看每局明细</button>' : ''}
+      ${!R.state.active && R.state.code && R.state.room
+        && R.state.room.creatorUid === R.state.uid
+        && R.state.room.sid === s.id ? `<div class="gap"></div>
       <button class="btn" onclick="Room.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
   };
 
-  // ---------- 局明细（按权限可改删） ----------
+  // ---------- 每局明细（只读） ----------
+  // 只有历史里按局记的旧场才有「每局明细」；新场是流水，直接在记分页看
   VIEWS.rounds = () => {
-    // 进行中的场（联机的不在 db.sessions 里）优先用 sessionCtx()，否则查本地历史
-    const live = sessionCtx();
-    const s = (live && live.id === view.sid) ? live : db.sessions.find((x) => x.id === view.sid);
+    const s = db.sessions.find((x) => x.id === view.sid);
     if (!s) return VIEWS.home();
-    const fromSession = view.from === 'session';
-    const editable = fromSession && (!online.active || RunfastSync.canEdit(online.room, online.uid));
-    const back = fromSession ? 'App.goSession()' : `App.goSettle('${view.sid}','${view.from}')`;
     return `
-      ${U.topbar('每局明细', back)}
-      <div class="card">${s.rounds.map((r, i) => roundRow(s, r, i, !editable, 'rounds')).join('')
+      ${topbar('每局明细', 'App.backFromRounds()')}
+      <div class="card">${s.rounds.map((r, i) => roundRow(s, r, i)).join('')
         || '<div class="muted">本场没有记录任何一局</div>'}</div>`;
   };
 
-  // 录入/改局结束后回哪：从明细页进来的回明细页，否则回记分页
-  function afterRecord(returnTo) {
-    if (returnTo === 'rounds') {
-      const s = sessionCtx();
-      if (s) { App.goRounds(s.id, 'session'); return; }
-    }
-    App.goSession();
-  }
-
   // ---------- 历史记录 ----------
+  // 行上的 sid 可能来自别人的房间快照（服务器不校验 sid），一律走 data-* + 事件委托，
+  // 不拼进 onclick —— 那是当 JS 源码编译的位置，esc() 挡不住。
   VIEWS.history = () => {
     const list = db.sessions.filter((s) => s.status === 'finished')
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     if (!list.length) {
-      return `${U.topbar('历史记录', 'App.goHome()')}
+      return `${topbar('历史记录', 'App.goHome()')}
         <div class="card"><div class="muted">还没有打完的场</div></div>`;
     }
     const edit = !!view.editMode;
@@ -416,188 +181,35 @@
         <button class="btn btn-sm btn-danger" ${sel.length ? '' : 'disabled style="opacity:.4"'} onclick="App.historyDeleteSel()">删除所选（${sel.length}）</button>
       </div>` : '';
     return `
-      ${U.topbar('历史记录', 'App.goHome()', actions)}
+      ${topbar('历史记录', 'App.goHome()', actions)}
       ${bar}
       <div class="card">
         ${list.map((s) => {
-          const info = `<div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(U.esc).join('、')}</div></div>`;
+          const info =`<div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(esc).join('、')}</div></div>`;
           if (edit) {
             const on = sel.includes(s.id);
             const box = on
               ? '<span style="flex-shrink:0;width:22px;height:22px;border-radius:6px;background:var(--felt-light);color:#fff;text-align:center;line-height:22px;font-size:14px">✓</span>'
               : '<span style="flex-shrink:0;width:22px;height:22px;border-radius:6px;border:2px solid #cbd5e1;display:inline-block"></span>';
-            return `<div class="row" onclick="App.historyToggle('${s.id}')" style="cursor:pointer">
+            return `<div class="row" data-app-act="pick" data-sid="${esc(s.id)}" style="cursor:pointer">
               <span style="display:flex;align-items:center;gap:12px">${box}${info}</span></div>`;
           }
-          return `<div class="row" onclick="App.goSettle('${s.id}','history')" style="cursor:pointer">
-            ${info}<span class="muted">${s.rounds.length} 局 ›</span></div>`;
+          return `<div class="row" data-app-act="open" data-sid="${esc(s.id)}" style="cursor:pointer">
+            ${info}<span class="muted">${L.sessionSize(s)} ›</span></div>`;
         }).join('')}
       </div>`;
   };
 
-  // ---------- 联机 ----------
+  // ---------- 加入联机场 ----------
   VIEWS.joinRoom = () => `
-    ${U.topbar('加入联机场', 'App.goHome()')}
+    ${topbar('加入联机场', 'App.goHome()')}
     <div class="card">
       <div class="section-title">输入 6 位房号</div>
-      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? U.esc(view.code) : ''}">
+      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? esc(view.code) : ''}">
       <div class="gap"></div>
       <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
       <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
     </div>`;
-
-  VIEWS.lobby = () => {
-    const seats = seatsOf();
-    const s = online.room.session;
-    const mine = new Set(mySeatIdx());
-    const owner = isOwner();
-    return `
-      ${U.topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
-      ${onlineBar()}
-      <div class="card">
-        <div class="section-title">选个座位（点灰色名字入座；没带手机的人可由你替 TA 入座）</div>
-        <div class="chips">
-          ${seats.map((seat, i) => seat.claimedBy
-            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${U.esc(seat.name)}${mine.has(i) ? (seat.name === myOwnName() ? '（我，点退座）' : '（代，点退座）') : ' ✓'}</button>`
-            : `<button class="chip" onclick="App.claimSeat(${i})">${U.esc(seat.name)}</button>`).join('')}
-        </div>
-        <div class="muted" style="margin-top:10px">灰色=空位，高亮=已入座。所有座位坐满后房主才能开始。</div>
-      </div>
-      ${owner
-        ? `<button class="btn btn-primary" ${allClaimed() ? '' : 'disabled style="opacity:.4"'} onclick="App.startPlaying()">
-             ${allClaimed() ? '开始记分' : '等所有人入座…'}</button>`
-        : `<div class="muted" style="text-align:center;margin:10px 0">等房主开始…先选好你的座位</div>`}`;
-  };
-
-  function onlineBar() {
-    if (!online.active) return '';
-    const playing = RunfastSync.playingCount(seatsOf());
-    const watching = RunfastSync.observerCount(online.presence, seatsOf());
-    const dot = online.status === 'connected' ? '' : 'off';
-    return `<div class="sync-bar">
-      <span><span class="sync-dot ${dot}"></span>房号 ${U.esc(online.code)} · ${playing} 人在玩 · ${watching} 人观战</span>
-    </div>`;
-  }
-
-  // 顶栏右上角操作区：联机（含大厅）有分享，本地只有「更多」
-  const topActions = (withShare) =>
-    `${withShare ? '<button class="icon-btn" onclick="Room.share()">分享</button>' : ''}<button class="icon-btn" onclick="App.openMore()">⋯</button>`;
-
-  async function enterRoom(code) {
-    try {
-      await RunfastSync.signIn();
-      online.uid = RunfastSync.getUid();
-      const { data } = await RunfastSync.readRoom(code);
-      if (data === null) {
-        // 只有失败的房号就是本机保存的那个时才清掉，避免误删仍有效的“回到联机房间”
-        let saved = null;
-        try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
-        if (saved && saved.code === code) localStorage.removeItem('runfast.sync.room');
-        // 从邀请链接/回到房间进来但房间暂时不在：带着房号去「加入联机场」，一键重试，不用手输
-        alert('房间 ' + code + ' 暂时进不去，可能房主还没建好或已关闭。已帮你填好房号，稍后点「进入房间」重试即可。');
-        go({ name: 'joinRoom', code });
-        return;
-      }
-      online.active = true;
-      online.code = code;
-      online.room = data;
-      online.myOwn = loadMyOwn(code);   // 载入本机记的「本人」座位（多座时区分我/代）
-      online.status = 'connecting';
-      localStorage.setItem('runfast.sync.room', JSON.stringify({ code }));
-      await RunfastSync.subscribe(code, {
-        onRoom(room) {
-          online.room = room;
-          if (room.session.status === 'finished') { snapshotOnlineFinished(room.session); return; }
-          maybeAutoSaveDraft(); // 房主端：本局全部确认则自动记一局
-          routeByPhase();
-        },
-        onStatus(st) {
-          online.status = st;
-          if (['lobby', 'session'].includes(view.name)) render();
-        },
-        onPresence(devices) {
-          online.presence = devices;
-          if (['lobby', 'session'].includes(view.name)) render();
-        },
-        onDeleted() {
-          const wasOwner = isOwner();
-          leaveOnline();
-          if (!wasOwner) alert('房间已被房主关闭');
-          go({ name: 'home' });
-        },
-      });
-      routeByPhase();
-    } catch (e) { alert('进入房间失败：' + e.message); }
-  }
-
-  // playing 阶段的合法子视图：停在这些页面时房间更新只重绘，不要把人踢回记分页
-  const PLAYING_VIEWS = ['session', 'record', 'players', 'rounds'];
-  const LOBBY_VIEWS = ['lobby', 'players'];   // 大厅阶段也允许停在「玩家管理」，别被别人入座的广播弹回大厅
-
-  // 按房间阶段决定当前应在哪个视图（大厅/记分/结算），并在原地更新
-  function routeByPhase() {
-    const phase = online.room.phase;
-    if (phase === 'lobby') {
-      if (!LOBBY_VIEWS.includes(view.name)) go({ name: 'lobby' }); else render();
-    } else if (phase === 'playing') {
-      if (!PLAYING_VIEWS.includes(view.name)) go({ name: 'session' }); else render();
-    }
-  }
-
-  function leaveOnline() {
-    RunfastSync.close();
-    online.active = false;
-    online.code = null;
-    online.room = null;
-    online.status = 'idle';
-    online.myOwn = null;   // 仅清内存；localStorage 的「本人」座位保留，重进本房仍认得
-    localStorage.removeItem('runfast.sync.room');
-  }
-
-  function snapshotOnlineFinished(session) {
-    if (!db.sessions.some((x) => x.id === session.id)) {
-      db.sessions.push(JSON.parse(JSON.stringify(session)));
-      saveDB();
-    }
-    const code = online.code;
-    const admin = RunfastSync.canAdmin(online.room, online.uid);
-    const room = online.room;
-    RunfastSync.close();
-    online.active = false;
-    online.status = 'idle';
-    localStorage.removeItem('runfast.sync.room');
-    // 仅房主保留 code/room，用于本场结算页的「关闭房间」
-    online.code = admin ? code : null;
-    online.room = admin ? room : null;
-    go({ name: 'settle', sid: session.id, from: 'home' });
-  }
-
-  // ---------- 玩家管理 ----------
-  VIEWS.players = () => {
-    const s = sessionCtx();
-    const preGame = s.rounds.length === 0;   // 还没开打：可真删、改名绝对安全
-    const inLobby = online.active && online.room && online.room.phase === 'lobby';
-    const back = inLobby ? 'App.backFromPlayers()' : 'App.goSession()';
-    return `
-      ${U.topbar('玩家管理', back)}
-      <div class="card">
-        ${s.players.map((n) => `<div class="row"><span>${U.esc(n)}${!preGame && !s.activePlayers.includes(n) ? ' <span class="muted">（已离场）</span>' : ''}</span>
-          <span style="flex-shrink:0;display:inline-flex;gap:6px">
-            <button class="btn btn-sm" onclick="App.renamePlayer('${U.esc(n)}')">改名</button>
-            ${preGame
-              ? `<button class="btn btn-sm btn-danger" onclick="App.removePlayer('${U.esc(n)}')">删除</button>`
-              : (s.activePlayers.includes(n)
-                  ? `<button class="btn btn-sm" onclick="App.leave('${U.esc(n)}')">标记离场</button>`
-                  : `<button class="btn btn-sm" onclick="App.comeBack('${U.esc(n)}')">回归</button>`)}
-          </span>
-        </div>`).join('')}
-        <div style="display:flex;gap:8px;margin-top:12px">
-          <input type="text" id="joinName" placeholder="加个玩家名字（8 字以内）" maxlength="8" value="${U.esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
-          <button class="btn btn-sm" onclick="App.joinPlayer()">加入</button>
-        </div>
-        <div class="muted" style="margin-top:10px">${preGame ? '还没开打：可改名、删除玩家或加人。' : '离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。'}</div>
-      </div>`;
-  };
 
   // ---------- 导入前校验 ----------
   const validId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(s);
@@ -608,13 +220,26 @@
       if (!validId(s.id)) return false;
       if (!(Number.isInteger(s.pricePerCardFen) && s.pricePerCardFen > 0)) return false;
       if (!(s.status === 'active' || s.status === 'finished')) return false;
-      if (!(Array.isArray(s.players) && Array.isArray(s.activePlayers) && Array.isArray(s.rounds))) return false;
+      if (!(Array.isArray(s.players) && Array.isArray(s.rounds))) return false;
       if (new Set(s.players).size !== s.players.length) return false;
-      if (new Set(s.activePlayers).size !== s.activePlayers.length) return false;
-      if (!s.activePlayers.every((n) => s.players.includes(n))) return false;
+      // 旧场才有 activePlayers（在场名单）；新的流水场没有这个字段
+      if (s.activePlayers !== undefined) {
+        if (!Array.isArray(s.activePlayers)) return false;
+        if (new Set(s.activePlayers).size !== s.activePlayers.length) return false;
+        if (!s.activePlayers.every((n) => s.players.includes(n))) return false;
+        s.activePlayers.forEach((n) => names.add(n));
+      }
       if (s.status === 'active') activeCount++;
       s.players.forEach((n) => names.add(n));
-      s.activePlayers.forEach((n) => names.add(n));
+      if (s.transfers !== undefined) {
+        if (!Array.isArray(s.transfers)) return false;
+        for (const t of s.transfers) {
+          if (!validId(t.id)) return false;
+          if (!s.players.includes(t.from) || !s.players.includes(t.to)) return false;
+          if (t.from === t.to) return false;
+          if (!(Number.isInteger(t.points) && t.points > 0 && t.points <= 9999)) return false;
+        }
+      }
       for (const r of s.rounds) {
         if (!validId(r.id)) return false;
         if (r.at !== undefined && typeof r.at !== 'string') return false;
@@ -630,54 +255,39 @@
       }
     }
     if (activeCount > 1) return false;
-    return Array.from(names).every((n) => U.validName(n));
+    return Array.from(names).every((n) => validName(n));
   }
 
-  // 改赢家时保留其余已填、去掉新赢家那格
-  function cleanEntries(winnerIdx) {
-    const src = (online.room.draft && online.room.draft.entries) || {};
-    const out = {};
-    for (const k of Object.keys(src)) if (Number(k) !== winnerIdx) out[k] = src[k];
-    return out;
-  }
+  // 房间的两个视图挂进路由；房间需要的宿主能力在这里注入
+  VIEWS.joinName = () => R.views.joinName();
+  VIEWS.room = () => R.views.room();
 
-  // 本局所有输家都点了确认？（winner 已定 + 每个输家 entry 已填且 confirmed）
-  function draftAllConfirmed(draft, idxs) {
-    if (!draft || draft.winner == null) return false;
-    const losers = idxs.filter((i) => i !== draft.winner);
-    if (!losers.length) return false;
-    return losers.every((i) => draft.entries && draft.entries[i]
-      && typeof draft.entries[i].cardsLeft === 'number' && draft.entries[i].confirmed);
-  }
-
-  // 房主端：本局全部确认后自动提交成一局（只有房主能写 session.rounds；幂等，防重复）
-  let _autoSaving = false;
-  async function maybeAutoSaveDraft() {
-    if (_autoSaving || !online.active || !isOwner()) return;
-    const room = online.room;
-    if (!room || room.phase !== 'playing') return;
-    const idxs = activeIdx();
-    if (!draftAllConfirmed(room.draft, idxs)) return;
-    _autoSaving = true;
-    try {
-      const seats = seatsOf();
-      await RunfastSync.mutate(online.code, (r) => {
-        if (!draftAllConfirmed(r.draft, idxs)) return r; // 幂等：草稿已被清/未齐则不动
-        const round = RunfastSync.draftToRound(r.draft, seats, idxs);
-        r.session.rounds.push({ id: 'r' + Date.now(), at: new Date().toISOString(), winner: round.winner, losers: round.losers });
-        r.draft = null;
-        r.updatedAt = Date.now();
-        return r;
-      });
-    } catch (e) { /* 失败无妨：下次 onRoom 推送回来会再判一次 */ }
-    finally { _autoSaving = false; }
-  }
+  R.init({
+    go,
+    render,
+    view: () => view,
+    directory: () => db.playerDirectory,
+    // 记住这个名字：进下一个房间时自动填、并进常用名录做快选
+    saveName(name) {
+      try { localStorage.setItem('runfast.lastName', name); } catch (e) { /* 忽略 */ }
+      if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
+    },
+    saveLocal() { saveDB(); render(); },
+    // 本场结束：快照存进本机历史（幂等），跳结算页
+    onFinished(session) {
+      const snap = JSON.parse(JSON.stringify(session));
+      snap.status = 'finished';
+      const i = db.sessions.findIndex((x) => x.id === snap.id);
+      if (i >= 0) db.sessions[i] = snap; else db.sessions.push(snap);
+      saveDB();
+      go({ name: 'settle', sid: snap.id, from: 'home' });
+    },
+  });
 
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
-    goSetup: () => go({ name: 'setup', sel: [], price: '1', manage: false }),
-    goSession: () => go({ name: 'session' }),
+    goSetup: () => go({ name: 'setup', sel: [], myName: '', price: '1', manage: false }),
     goHistory: () => go({ name: 'history', editMode: false, sel: [] }),
     historyEditOn() { view.editMode = true; view.sel = []; render(); },
     historyEditOff() { view.editMode = false; view.sel = []; render(); },
@@ -704,8 +314,7 @@
 
     goOnlineSetup() {
       if (!RunfastSync.configured()) { alert('联机要在房主电脑上启动「跑得快联机」服务后，用手机扫主机页二维码进入才能用'); return; }
-      if (activeSession()) { alert('本地还有一场没打完，请先结算或作废它'); return; }
-      go({ name: 'setup', sel: [], price: '1', manage: false, mode: 'online' });
+      go({ name: 'setup', sel: [], myName: R.lastName(), price: '1', manage: false, mode: 'online' });
     },
 
     goJoinRoom() {
@@ -716,129 +325,34 @@
     joinRoomSubmit() {
       const code = document.getElementById('roomCode').value.trim();
       if (!RunfastSync.validRoomCode(code)) { alert('房号是 6 位数字'); return; }
-      enterRoom(code);
+      R.preview(code);
     },
-
-    async claimSeat(i) {
-      const name = (seatsOf()[i] || {}).name;
-      const firstClaim = !isSeated();   // 入座前我一个座都没有 → 这是我的第一个座，记为「我」；已有座再点=代占，不夺「我」
-      try {
-        await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', online.uid);
-        if (name && firstClaim) { online.myOwn = name; saveMyOwn(online.code, name); }
-      } catch (e) { alert(e.message); } // 403 = 座位已被占，onRoom 会刷新成最新
-    },
-    async releaseSeat(i) {
-      const name = (seatsOf()[i] || {}).name;
-      try {
-        await RunfastSync.patch(online.code, '/seats/' + i + '/claimedBy', null);
-        if (name && name === online.myOwn) { online.myOwn = null; saveMyOwn(online.code, null); } // 退了本人座 → 下次入座重新认「我」
-      } catch (e) { alert(e.message); }
-    },
-    async startPlaying() {
-      if (!isOwner()) { alert('只有房主可以开始'); return; }
-      if (!allClaimed()) { alert('还有空座，等大家都入座再开始'); return; }
-      try { await RunfastSync.patch(online.code, '/phase', 'playing'); }
-      catch (e) { alert('开始失败：' + e.message); }
-    },
-
-    async draftPickWinner(i) {
-      if (!(isSeated() || isOwner())) { alert('观战中不能记分'); return; }
-      try {
-        // 定/改赢家：清掉新赢家自己的 entry（赢家不填）
-        await RunfastSync.patch(online.code, '/draft', { winner: i, entries: cleanEntries(i) });
-      } catch (e) { alert(e.message); }
-    },
-    async draftFill(i, k) {
-      // 改数即回到「未确认」，需重新点确认
-      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: k, shutout: k === 10, confirmed: false }); }
-      catch (e) { alert(e.message); }
-    },
-    async draftToggleShutout(i) {
-      const e = (online.room.draft && online.room.draft.entries[i]) || null;
-      if (!e || typeof e.cardsLeft !== 'number') return;
-      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: e.cardsLeft, shutout: !e.shutout, confirmed: false }); }
-      catch (err) { alert(err.message); }
-    },
-    async draftConfirm(i) {
-      const e = (online.room.draft && online.room.draft.entries[i]) || null;
-      if (!e || typeof e.cardsLeft !== 'number') { alert('先选「剩几张」再确认'); return; }
-      // 切换确认/取消确认；全部确认后房主端会自动记这一局
-      try { await RunfastSync.patch(online.code, '/draft/entries/' + i, { cardsLeft: e.cardsLeft, shutout: !!e.shutout, confirmed: !e.confirmed }); }
-      catch (err) { alert(err.message); }
-    },
-    // 代填：本地展开/收起某座的数字键盘（纯 UI，不联网）
-    draftOpenSeat(i) { draftOpen.add(i); render(); },
-    draftCloseSeat(i) { draftOpen.delete(i); render(); },
 
     rejoinRoom() {
       let saved = null;
       try { saved = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
-      if (saved && RunfastSync.validRoomCode(saved.code)) enterRoom(saved.code);
+      if (saved && RunfastSync.validRoomCode(saved.code)) R.preview(saved.code);
       else { localStorage.removeItem('runfast.sync.room'); render(); }
     },
 
-    leaveRoom() {
-      if (!confirm('退出房间？（随时可用房号再进来）')) return;
-      const code = online.code;
-      leaveOnline();
-      // 主动退出保留房号，首页「回到联机房间」可一键回来；结束/被关房的清除逻辑不受影响
-      try { localStorage.setItem('runfast.sync.room', JSON.stringify({ code })); } catch (e) { /* 忽略 */ }
-      App.goHome();
+    // 名录里的名字：联机场填进「我的名字」，本地场是勾选本场玩家
+    pickName(n) {
+      view.price = document.getElementById('price').value;
+      if (view.mode === 'online') { document.getElementById('myName').value = n; return; }
+      const i = view.sel.indexOf(n);
+      if (i >= 0) view.sel.splice(i, 1); else view.sel.push(n);
+      render();
     },
 
-    openMore() {
-      const items = [];
-      if (!online.active) {                       // 本地单机（「结算本场」已放到记分页页脚，不再收进这里）
-        items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
-        items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
-      } else if (view.name === 'lobby') {         // 大厅：房主可编辑玩家（改名/增删），其余只有退出
-        if (isOwner()) items.push({ label: '✏️ 编辑玩家（改名/增删）', onclick: 'App.goPlayers()' });
-        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
-      } else if (isOwner()) {                     // 联机房主
-        items.push({ label: '玩家管理', onclick: 'App.goPlayers()' });
-        items.push({ label: online.room.allowEdit ? '✅ 牌友可改已存局' : '🔒 改局仅房主', onclick: 'App.toggleAllowEdit()' });
-        items.push({ label: '作废本场', onclick: 'App.voidSession()', danger: true });
-        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
-      } else {                                    // 联机牌友/观战
-        items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
-      }
-      U.openSheet(items);
-    },
-
-    async toggleAllowEdit() {
-      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以修改权限'); return; }
-      try {
-        await RunfastSync.mutate(online.code, (room) => {
-          room.allowEdit = !room.allowEdit;
-          room.updatedAt = Date.now();
-          return room;
-        });
-      } catch (e) { alert('操作失败：' + e.message); }
-    },
-
-    async closeRoom() {
-      if (!RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以关闭房间'); return; }
-      if (!confirm('关闭后房间从云端删除（战绩已存进各自手机历史），确定？')) return;
-      try {
-        await RunfastSync.deleteRoom(online.code);
-        online.code = null; online.room = null;
-        render();
-      } catch (e) { alert('关闭失败：' + e.message); }
-    },
-
-    async closeRoomVoid() {
-      try {
-        const code = online.code;
-        leaveOnline();
-        await RunfastSync.deleteRoom(code);
-        App.goHome();
-      } catch (e) { alert('作废失败：' + e.message); }
-    },
-
-    togglePlayer(name) {
-      view.price = document.getElementById('price').value; // 保留已输入的单价
-      const i = view.sel.indexOf(name);
-      if (i >= 0) view.sel.splice(i, 1); else view.sel.push(name);
+    addLocalPlayer() {
+      const name = document.getElementById('myName').value.trim();
+      if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (view.sel.includes(name)) { alert('这一场已经有这个名字了'); return; }
+      view.price = document.getElementById('price').value;
+      if (!db.playerDirectory.includes(name)) db.playerDirectory.push(name);
+      view.sel.push(name);
+      saveDB();
+      view.myName = '';
       render();
     },
 
@@ -851,7 +365,7 @@
     renameDirName(name) {
       const next = (window.prompt('把「' + name + '」改为（不影响历史战绩）：', name) || '').trim();
       if (!next || next === name) return;
-      if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (!validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (db.playerDirectory.includes(next)) { alert('名单里已有这个名字'); return; }
       view.price = document.getElementById('price').value;
       db.playerDirectory = db.playerDirectory.map((n) => (n === name ? next : n));
@@ -870,264 +384,59 @@
       render();
     },
 
-    addPlayer() {
-      const inp = document.getElementById('newName');
-      const name = inp.value.trim();
-      if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
-      if (db.playerDirectory.includes(name)) { alert('已有同名玩家，直接点选即可'); return; }
-      view.price = document.getElementById('price').value;
-      db.playerDirectory.push(name);
-      view.sel.push(name);
-      saveDB();
-      render();
-    },
-
     async startSession() {
       const priceFen = L.yuanToFen(document.getElementById('price').value.trim());
-      if (view.sel.length < 2 || view.sel.length > 8) { alert('请选择 2～8 名玩家'); return; }
       if (Number.isNaN(priceFen)) { alert('单价格式不对，例：1 或 0.5'); return; }
+      if (view.mode === 'online') {
+        const name = (document.getElementById('myName').value || '').trim();
+        if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+        try {
+          const { code, pid } = await RunfastSync.createRoom({ name, pricePerCardFen: priceFen });
+          if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
+          try { localStorage.setItem('runfast.lastName', name); } catch (e) { /* 忽略 */ }
+          await R.attach(code, pid);
+        } catch (e) { alert('建房失败：' + e.message); }
+        return;
+      }
+      if (view.sel.length < 2) { alert('本地场至少要 2 个玩家'); return; }
+      if (activeSession()) { App.goSession(); return; }
       const session = {
         id: 's' + Date.now(),
         createdAt: new Date().toISOString(),
         pricePerCardFen: priceFen,
         players: view.sel.slice(),
-        activePlayers: view.sel.slice(),
         status: 'active',
         rounds: [],
+        transfers: [],
       };
-      if (view.mode === 'online') {
-        try {
-          const code = await RunfastSync.createRoom(session);
-          await enterRoom(code);
-        } catch (e) { alert('建房失败：' + e.message); }
-        return;
-      }
-      if (activeSession()) { App.goSession(); return; }
       db.sessions.push(session);
       saveDB();
-      App.goSession();
+      R.startLocal(session);
     },
 
-    goRecord() {
-      const s = sessionCtx();
-      if (s.activePlayers.length < 2) { alert('在场玩家不足 2 人，请先到「玩家管理」加人'); return; }
-      go({ name: 'record', participants: s.activePlayers.slice(), winner: null, cards: Object.create(null), shutoutOff: Object.create(null), editId: null, editIndex: null });
-    },
-
-    cancelRecord() { afterRecord(view.returnTo); },
-
-
-    pickWinner(name) {
-      view.winner = name;
-      delete view.cards[name]; // 赢家固定 0 张
-      render();
-    },
-
-    pickCards(name, k) {
-      view.cards[name] = k;
-      delete view.shutoutOff[name]; // 改牌数后全关标记回到自动状态
-      render();
-    },
-
-    toggleShutout(name) {
-      if (view.shutoutOff[name]) delete view.shutoutOff[name];
-      else view.shutoutOff[name] = true;
-      render();
-    },
-
-    saveRound() {
-      const losers = currentLosers();
-      if (!view.winner || losers.some((l) => typeof l.cardsLeft !== 'number')) return;
-      const winner = view.winner;
-      const editId = view.editId;
-      const returnTo = view.returnTo;
-      const newRound = editId ? null : { id: 'r' + Date.now(), at: new Date().toISOString(), winner, losers };
-      commitSession((s) => {
-        if (editId) {
-          const r = s.rounds.find((x) => x.id === editId);
-          if (!r) return;
-          r.winner = winner;
-          r.losers = losers;
-        } else {
-          s.rounds.push(newRound);
-        }
-      });
-      afterRecord(returnTo);
-    },
-
-    editRound(rid, from) {
-      if (online.active && !RunfastSync.canEdit(online.room, online.uid)) { alert('房主未开启「允许他人修改」，只有房主可以改这一局'); return; }
-      const s = sessionCtx();
-      const i = s.rounds.findIndex((x) => x.id === rid);
-      const r = s.rounds[i];
-      const cards = Object.create(null), shutoutOff = Object.create(null);
-      r.losers.forEach((l) => {
-        cards[l.name] = l.cardsLeft;
-        if (l.cardsLeft === 10 && !l.shutout) shutoutOff[l.name] = true;
-      });
-      go({
-        name: 'record',
-        participants: [r.winner, ...r.losers.map((l) => l.name)],
-        winner: r.winner, cards, shutoutOff,
-        editId: rid, editIndex: i + 1,
-        returnTo: from === 'rounds' ? 'rounds' : 'session',
-      });
-    },
-
-    deleteRound(rid) {
-      if (online.active && !RunfastSync.canEdit(online.room, online.uid)) { alert('房主未开启「允许他人修改」，只有房主可以删这一局'); return; }
-      if (!confirm('删除后总分将重算，确定删除这一局？')) return;
-      commitSession((s) => { s.rounds = s.rounds.filter((x) => x.id !== rid); });
-    },
-
-    goPlayers: () => go({ name: 'players' }),
-    rememberJoinName(v) { view.joinName = v; },
-
-    leave(name) {
-      if (online.active) {
-        if (!isOwner()) { alert('只有房主可以标记离场'); return; }
-        const i = seatsOf().findIndex((s) => s.name === name);
-        RunfastSync.mutate(online.code, (room) => {
-          room.session.activePlayers = room.session.activePlayers.filter((n) => n !== name);
-          if (room.seats[i]) room.seats[i].claimedBy = null; // 腾座
-          room.updatedAt = Date.now();
-          return room;
-        }).catch((e) => alert('操作失败：' + e.message));
-        return;
-      }
-      commitSession((s) => { s.activePlayers = s.activePlayers.filter((n) => n !== name); });
-    },
-
-    comeBack(name) {
-      const s = sessionCtx();
-      if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      if (online.active && !isOwner()) { alert('只有房主可以让玩家回归'); return; }
-      commitSession((x) => { x.activePlayers.push(name); });
-    },
-
-    async joinPlayer() {
-      const s = sessionCtx();
-      const name = document.getElementById('joinName').value.trim();
-      if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
-      if (s.players.includes(name)) { alert('这个名字本场已存在'); return; }
-      if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
-      if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
-      if (online.active) {
-        if (!isOwner()) { alert('只有房主可以加人'); return; }
-        try {
-          await RunfastSync.mutate(online.code, (room) => {
-            room.session.players.push(name);
-            room.session.activePlayers.push(name);
-            room.seats.push({ name, claimedBy: null }); // 新座位待认领
-            room.updatedAt = Date.now();
-            return room;
-          });
-          view.joinName = '';
-          render();   // 广播回声可能已先于此处重绘过一次，这里补一次让清空生效
-        } catch (e) { alert('加人失败：' + e.message); }
-        return;
-      }
-      view.joinName = '';
-      commitSession((x) => { x.players.push(name); x.activePlayers.push(name); });
-    },
-
-    // 改名：把名字在座位 + 名单 + 已记的每一局里一并替换（各阶段都安全）；系统输入框，跟常用名录改名一致
-    renamePlayer(oldName) {
-      const s = sessionCtx();
-      if (online.active && !isOwner()) { alert('只有房主可以改名'); return; }
-      const next = (window.prompt('把「' + oldName + '」改成：', oldName) || '').trim();
-      if (!next || next === oldName) return;
-      if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
-      if (s.players.includes(next)) { alert('这个名字本场已存在'); return; }
-      const rn = (x) => {
-        x.players = x.players.map((n) => (n === oldName ? next : n));
-        x.activePlayers = x.activePlayers.map((n) => (n === oldName ? next : n));
-        (x.rounds || []).forEach((r) => {
-          if (r.winner === oldName) r.winner = next;
-          (r.losers || []).forEach((l) => { if (l.name === oldName) l.name = next; });
-        });
-      };
-      if (online.active) {
-        RunfastSync.mutate(online.code, (room) => {
-          rn(room.session);
-          const seat = room.seats.find((st) => st.name === oldName);
-          if (seat) seat.name = next;
-          room.updatedAt = Date.now();
-          return room;
-        }).then(() => { if (online.myOwn === oldName) { online.myOwn = next; saveMyOwn(online.code, next); } })
-          .catch((e) => alert('改名失败：' + e.message));
-      } else {
-        commitSession(rn);
-      }
-    },
-
-    // 删除玩家（仅未开打）：把座位从房间移除、并从名单去掉。开打后请用「标记离场」。
-    removePlayer(name) {
-      const s = sessionCtx();
-      if (s.rounds.length) { alert('已经开打了，请用「标记离场」'); return; }
-      if (online.active && !isOwner()) { alert('只有房主可以删除玩家'); return; }
-      if (s.players.length <= 2) { alert('至少保留 2 名玩家'); return; }
-      if (!confirm('删除玩家「' + name + '」？')) return;
-      if (online.active) {
-        RunfastSync.mutate(online.code, (room) => {
-          room.seats = room.seats.filter((st) => st.name !== name);
-          room.session.players = room.session.players.filter((n) => n !== name);
-          room.session.activePlayers = room.session.activePlayers.filter((n) => n !== name);
-          room.updatedAt = Date.now();
-          return room;
-        }).then(() => { if (online.myOwn === name) { online.myOwn = null; saveMyOwn(online.code, null); } })
-          .catch((e) => alert('删除失败：' + e.message));
-      } else {
-        commitSession((x) => {
-          x.players = x.players.filter((n) => n !== name);
-          x.activePlayers = x.activePlayers.filter((n) => n !== name);
-        });
-      }
-    },
-
-    // 玩家管理返回：大厅阶段回大厅，否则回记分页
-    backFromPlayers() {
-      if (online.active && online.room && online.room.phase === 'lobby') go({ name: 'lobby' });
-      else App.goSession();
-    },
-
-    finishSession() {
-      const s = sessionCtx();
-      if (!s.rounds.length) { alert('还没记过任何一局，不能结算'); return; }
-      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以结算本场'); return; }
-      if (!confirm('结算后不能再记新局，确定结算本场吗？')) return;
-      const sid = s.id;
-      commitSession((x) => {
-        x.status = 'finished';
-        x.finishedAt = new Date().toISOString();
-      });
-      if (!online.active) App.goSettle(sid, 'home');
-      // 联机模式：结算状态经云端推送回来后由 onRoom 快照并跳转（Task 5）
-    },
-
-    voidSession() {
-      if (online.active && !RunfastSync.canAdmin(online.room, online.uid)) { alert('只有房主可以作废本场'); return; }
-      if (!confirm('作废后本场所有记录将被删除、不进历史，确定作废？')) return;
-      if (online.active) { App.closeRoomVoid(); return; }
+    goSession() {
       const s = activeSession();
-      db.sessions = db.sessions.filter((x) => x.id !== s.id);
-      saveDB();
-      App.goHome();
+      if (!s) { App.goHome(); return; }
+      R.startLocal(s);
     },
 
     goSettle: (sid, from) => go({ name: 'settle', sid, from: from || 'home' }),
-    goRounds: (sid, from) => go({ name: 'rounds', sid, from: from || 'home' }),
+    backToRoom() { go({ name: 'room' }); },
+    // 结算页 ↔ 每局明细：sid / from 都从当前 view 取，不拼进 onclick
+    goRoundsFromSettle() {
+      const s = settleSession();
+      if (s) go({ name: 'rounds', sid: s.id, from: view.from });
+    },
+    backFromRounds() { go({ name: 'settle', sid: view.sid, from: view.from }); },
 
-    async copyText(sid) {
-      const s = db.sessions.find((x) => x.id === sid);
+    async copyText() {
+      const s = settleSession();
+      if (!s) return;
       const ok = await U.copyToClipboard(L.summaryText(s));
       alert(ok ? '已复制，去粘贴发给牌友吧' : '复制失败，请改用「分享战绩图」或截图');
     },
 
-    shareImage(sid) {
-      const s = db.sessions.find((x) => x.id === sid);
-      RunfastShare.share(s, L);
-    },
+    shareImage() { const s = settleSession(); if (s) RunfastShare.share(s, L); },
 
     exportData() {
       const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
@@ -1171,8 +480,19 @@
   };
   window.App = App;
 
+  // 历史列表的行带 sid，走 data-* 事件委托（见 VIEWS.history 的注释）
+  document.addEventListener('click', (ev) => {
+    const t = ev.target;
+    const el = t && t.closest ? t.closest('[data-app-act]') : null;
+    if (!el) return;
+    const sid = el.getAttribute('data-sid');
+    const act = el.getAttribute('data-app-act');
+    if (act === 'open') App.goSettle(sid, 'history');
+    else if (act === 'pick') App.historyToggle(sid);
+  });
+
   const roomParam = location.search.match(/[?&]room=([0-9]{6})\b/);
-  if (roomParam && RunfastSync.configured()) enterRoom(roomParam[1]);
+  if (roomParam && RunfastSync.configured()) R.preview(roomParam[1]);
 
   render();
 })();
