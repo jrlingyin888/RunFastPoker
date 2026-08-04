@@ -276,10 +276,14 @@ var RunfastRoom = (function () {
     host.go({ name: 'room' });
   }
 
-  // 结束本场：各端把快照存进自己手机的历史，然后断开连接跳结算页
+  // 结束本场：各端把快照存进自己手机的历史，然后断开连接跳结算页。
+  // 建房人保留房号，好在结算页上把房间从服务器删掉。
   function finishLocally() {
     const snap = snapshot();
+    const mine = !!(state.room && state.room.creatorUid === state.uid);
+    const code = state.code, room = state.room;
     close();
+    if (mine) { state.code = code; state.room = room; }
     host.onFinished(snap);
   }
 
@@ -296,6 +300,10 @@ var RunfastRoom = (function () {
     resetState();
     try { localStorage.removeItem(ROOM_KEY); } catch (e) { /* 忽略 */ }
   }
+
+  // 邀请链接与邀请卡图片缓存（供分享面板用；下次分享时释放旧的）
+  const inviteLink = () => location.origin + location.pathname + '?room=' + state.code;
+  let inviteBlob = null, inviteUrl = null;
 
   // ---------- 交互（视图里的 onclick 走这里）----------
   const Room = {
@@ -403,9 +411,6 @@ var RunfastRoom = (function () {
       } catch (e) { alert('记分失败，请重试：' + e.message); }
     },
 
-    // mePanel / more / share 在 Task 7 补齐。做完 Task 6 时点自己头像或「⋯」会报
-    // 「Room.mePanel is not a function」，这是预期的，别当成 bug 去改。
-
     // ＋：邀请牌友扫码 / 直接加没带手机的人
     addMenu() {
       const items = [{ label: '➕ 加没带手机的人', onclick: 'Room.addOffline()' }];
@@ -423,6 +428,135 @@ var RunfastRoom = (function () {
       if (state.local) { localApply((s) => { s.players.push(name); if (s.activePlayers) s.activePlayers.push(name); }); return; }
       try { await S.patch(state.code, '/players/' + S.newKey('p_'), { name, uid: null, at: Date.now() }); }
       catch (e) { alert('加人失败：' + e.message); }
+    },
+
+    // 分享：先生成「邀请卡」图片（房号+二维码），弹面板——主按钮把图片走系统分享（牌友收到图直接扫码进房），
+    // 次按钮走系统分享发链接文字，长按卡片存整张。生成失败退回旧的简单面板（房号+二维码+复制），不卡住。
+    async share() {
+      const link = inviteLink(), code = state.code;
+      let cv;
+      try { cv = await RunfastShare.drawInviteCard(code, link); }
+      catch (e) { Room.shareFallback(); return; }
+      const blob = await RunfastShare.toBlob(cv);
+      if (!blob) { Room.shareFallback(); return; }
+      if (inviteUrl) URL.revokeObjectURL(inviteUrl);
+      inviteBlob = blob;
+      inviteUrl = URL.createObjectURL(blob);
+      const header = `<div style="text-align:center;padding:4px 0 2px">
+        <img src="${inviteUrl}" alt="扫码进房" style="width:100%;max-width:270px;border-radius:14px;display:block;margin:0 auto;box-shadow:0 6px 18px rgba(0,0,0,.35)">
+        <div class="muted" style="margin-top:10px">长按上图保存整张 · 或用下面按钮发出去</div>
+      </div>`;
+      U.openSheet([
+        { label: '📤 分享二维码图片', onclick: 'Room.shareInviteImage()' },
+        { label: '🔗 分享链接文字', onclick: 'Room.shareInviteLink()' },
+        { label: '复制链接', onclick: 'Room.copyInvite()' },
+      ], header);
+    },
+
+    // 主：把邀请卡当图片文件走系统分享（微信/群里收到的是图，直接扫码进房）；不支持文件分享则桌面下载 / 手机提示长按
+    async shareInviteImage() {
+      if (!inviteBlob) return;
+      const file = new File([inviteBlob], '跑得快房间' + (state.code || '') + '.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: '跑得快记分', text: '扫码进房记分（房号 ' + state.code + '）' }); return; }
+        catch (e) { if (e.name === 'AbortError') return; }
+      }
+      if (!('ontouchstart' in window)) { const a = document.createElement('a'); a.href = inviteUrl; a.download = file.name; a.click(); }
+      else alert('长按上面的图片即可保存或转发到微信');
+    },
+
+    // 次：走系统分享把邀请链接文字发出去（需要可点链接时用）；无系统分享则退回复制
+    async shareInviteLink() {
+      const link = inviteLink();
+      if (navigator.share) {
+        try { await navigator.share({ title: '跑得快记分', text: '一起来记分（房号 ' + state.code + '）', url: link }); return; }
+        catch (e) { if (e.name === 'AbortError') return; }
+      }
+      Room.copyInvite();
+    },
+
+    shareFallback() {
+      const link = inviteLink();
+      const header = `<div style="text-align:center;padding:10px 0 4px">
+        <div class="muted">房号</div>
+        <div style="font-size:34px;font-weight:800;letter-spacing:4px">${U.esc(state.code)}</div>
+        <img src="qr?text=${encodeURIComponent(link)}" alt="扫码进房" onerror="this.remove()"
+             style="width:180px;height:180px;margin:10px auto 6px;display:block">
+        <div class="muted">让牌友扫码，或复制链接发群里</div>
+        <div class="muted" style="word-break:break-all;margin-top:4px">${U.esc(link)}</div>
+      </div>`;
+      U.openSheet([{ label: '复制链接', onclick: 'Room.copyInvite()' }], header);
+    },
+
+    async copyInvite() {
+      const ok = await U.copyToClipboard('来跑得快记分房间围观/记分：' + inviteLink() + '（房号 ' + state.code + '）');
+      alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + state.code);
+    },
+
+    // 点自己头像：改昵称 / 退出房间
+    mePanel() {
+      const p = state.room.players[state.pid];
+      U.openSheet([
+        { label: '✏️ 更新昵称', onclick: 'Room.rename()' },
+        { label: '🚪 退出房间', onclick: 'Room.leave()', danger: true },
+      ], `<div class="sheet-head">${esc(p.name)}</div>`);
+    },
+
+    async rename() {
+      if (state.local) { alert('本地单机没有「我」，改名请点那个人的头像旁边的加人重来'); return; }
+      const p = state.room.players[state.pid];
+      const next = (window.prompt('把「' + p.name + '」改成：', p.name) || '').trim();
+      if (!next || next === p.name) return;
+      if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (S.nameTaken(state.room, next, state.pid)) { alert('房间里已经有人叫这个名字了'); return; }
+      try { await S.patch(state.code, '/players/' + state.pid + '/name', next); host.saveName(next); }
+      catch (e) { alert('改名失败：' + e.message); }
+    },
+
+    // ⋯：结算方案随时可看，结束本场谁都能点
+    more() {
+      const items = [
+        { label: '💰 结算方案', onclick: 'Room.settle()' },
+        { label: '🏁 结束本场', onclick: 'Room.finish()' },
+      ];
+      if (!state.local) {
+        items.push({ label: '✏️ 改我的昵称', onclick: 'Room.rename()' });
+        items.push({ label: '🚪 退出房间', onclick: 'Room.leave()', danger: true });
+      } else {
+        items.push({ label: '🚪 回首页', onclick: 'App.goHome()' });
+      }
+      U.openSheet(items);
+    },
+
+    // 只读地看当前结算方案：结算页在 from==='room' 时每次重绘都现取快照，不存旧数据
+    settle() {
+      host.go({ name: 'settle', sid: snapshot().id, from: 'room' });
+    },
+
+    async finish() {
+      if (!S.txList(state.room).length) { alert('还没记过分，不能结算'); return; }
+      if (!confirm('结束本场后不能再记分，确定吗？')) return;
+      if (state.local) {
+        localApply((s) => { s.status = 'finished'; s.finishedAt = new Date().toISOString(); });
+        const snap = snapshot();
+        close();
+        host.onFinished(snap);
+        return;
+      }
+      try {
+        await S.patch(state.code, '/finishedAt', new Date().toISOString());
+        await S.patch(state.code, '/status', 'finished');   // 各端收到推送后自己存历史、跳结算页
+      } catch (e) { alert('结算失败：' + e.message); }
+    },
+
+    // 结算页的「关闭房间」：从云端删掉这个房间（战绩已存进各自手机）
+    async closeRoom() {
+      if (!confirm('关闭后房间从服务器删除（战绩已存进各自手机历史），确定？')) return;
+      try {
+        await S.deleteRoom(state.code);
+        state.code = null; state.room = null;
+        host.render();
+      } catch (e) { alert('关闭失败：' + e.message); }
     },
   };
   if (typeof window !== 'undefined') window.Room = Room;

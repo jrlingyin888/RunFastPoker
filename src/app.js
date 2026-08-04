@@ -367,8 +367,10 @@
       <button class="btn" onclick="App.copyText('${s.id}')">📋 复制战绩文字</button>
       <div class="gap"></div>
       <button class="btn" onclick="App.goRounds('${s.id}','${view.from}')">查看每局明细</button>
-      ${online.code && online.room && online.room.session && online.room.session.id === s.id && isOwner() ? `<div class="gap"></div>
-      <button class="btn" onclick="App.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
+      ${RunfastRoom.state.code && RunfastRoom.state.room
+        && RunfastRoom.state.room.creatorUid === RunfastRoom.state.uid
+        && RunfastRoom.state.room.sid === s.id ? `<div class="gap"></div>
+      <button class="btn" onclick="Room.closeRoom()">关闭房间（牌友都保存后再关）</button>` : ''}`;
   };
 
   // ---------- 局明细（按权限可改删） ----------
@@ -479,7 +481,7 @@
 
   // 顶栏右上角操作区：联机（含大厅）有分享，本地只有「更多」
   const topActions = (withShare) =>
-    `${withShare ? '<button class="icon-btn" onclick="App.share()">分享</button>' : ''}<button class="icon-btn" onclick="App.openMore()">⋯</button>`;
+    `${withShare ? '<button class="icon-btn" onclick="Room.share()">分享</button>' : ''}<button class="icon-btn" onclick="App.openMore()">⋯</button>`;
 
   async function enterRoom(code) {
     try {
@@ -630,9 +632,6 @@
     if (activeCount > 1) return false;
     return Array.from(names).every((n) => U.validName(n));
   }
-
-  const inviteLink = () => location.origin + location.pathname + '?room=' + online.code;
-  let inviteBlob = null, inviteUrl = null;   // 邀请卡图片缓存（供「分享图片」按钮用；下次分享时释放旧的）
 
   // 改赢家时保留其余已填、去掉新赢家那格
   function cleanEntries(winnerIdx) {
@@ -815,69 +814,6 @@
           return room;
         });
       } catch (e) { alert('操作失败：' + e.message); }
-    },
-
-    // 分享：先生成「邀请卡」图片（房号+二维码），弹面板——主按钮把图片走系统分享（牌友收到图直接扫码进房），
-    // 次按钮走系统分享发链接文字，长按卡片存整张。生成失败退回旧的简单面板（房号+二维码+复制），不卡住。
-    async share() {
-      const link = inviteLink(), code = online.code;
-      let cv;
-      try { cv = await RunfastShare.drawInviteCard(code, link); }
-      catch (e) { App.shareFallback(); return; }
-      const blob = await RunfastShare.toBlob(cv);
-      if (!blob) { App.shareFallback(); return; }
-      if (inviteUrl) URL.revokeObjectURL(inviteUrl);
-      inviteBlob = blob;
-      inviteUrl = URL.createObjectURL(blob);
-      const header = `<div style="text-align:center;padding:4px 0 2px">
-        <img src="${inviteUrl}" alt="扫码进房" style="width:100%;max-width:270px;border-radius:14px;display:block;margin:0 auto;box-shadow:0 6px 18px rgba(0,0,0,.35)">
-        <div class="muted" style="margin-top:10px">长按上图保存整张 · 或用下面按钮发出去</div>
-      </div>`;
-      U.openSheet([
-        { label: '📤 分享二维码图片', onclick: 'App.shareInviteImage()' },
-        { label: '🔗 分享链接文字', onclick: 'App.shareInviteLink()' },
-        { label: '复制链接', onclick: 'App.copyInvite()' },
-      ], header);
-    },
-
-    // 主：把邀请卡当图片文件走系统分享（微信/群里收到的是图，直接扫码进房）；不支持文件分享则桌面下载 / 手机提示长按
-    async shareInviteImage() {
-      if (!inviteBlob) return;
-      const file = new File([inviteBlob], '跑得快房间' + (online.code || '') + '.png', { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: '跑得快记分', text: '扫码进房记分（房号 ' + online.code + '）' }); return; }
-        catch (e) { if (e.name === 'AbortError') return; }
-      }
-      if (!('ontouchstart' in window)) { const a = document.createElement('a'); a.href = inviteUrl; a.download = file.name; a.click(); }
-      else alert('长按上面的图片即可保存或转发到微信');
-    },
-
-    // 次：走系统分享把邀请链接文字发出去（需要可点链接时用）；无系统分享则退回复制
-    async shareInviteLink() {
-      const link = inviteLink();
-      if (navigator.share) {
-        try { await navigator.share({ title: '跑得快记分', text: '一起来记分（房号 ' + online.code + '）', url: link }); return; }
-        catch (e) { if (e.name === 'AbortError') return; }
-      }
-      App.copyInvite();
-    },
-
-    shareFallback() {
-      const link = inviteLink();
-      const header = `<div style="text-align:center;padding:10px 0 4px">
-        <div class="muted">房号</div>
-        <div style="font-size:34px;font-weight:800;letter-spacing:4px">${U.esc(online.code)}</div>
-        <img src="qr?text=${encodeURIComponent(link)}" alt="扫码进房" onerror="this.remove()"
-             style="width:180px;height:180px;margin:10px auto 6px;display:block">
-        <div class="muted">让牌友扫码，或复制链接发群里</div>
-        <div class="muted" style="word-break:break-all;margin-top:4px">${U.esc(link)}</div>
-      </div>`;
-      U.openSheet([{ label: '复制链接', onclick: 'App.copyInvite()' }], header);
-    },
-
-    async copyInvite() {
-      const ok = await U.copyToClipboard('来跑得快记分房间围观/记分：' + inviteLink() + '（房号 ' + online.code + '）');
-      alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + online.code);
     },
 
     async closeRoom() {
