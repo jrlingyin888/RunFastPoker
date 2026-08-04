@@ -23,7 +23,6 @@
 
   // ---------- 工具 ----------
   const $app = document.getElementById('app');
-  const validName = (s) => /^[^'"<>\\]{1,8}$/.test(s);
   const yuan = (fen) => L.fenToYuan(fen);
   const signYuan = (fen) => (fen > 0 ? '+' : '') + L.fenToYuan(fen);
   const cls = (fen) => (fen > 0 ? 'pos' : fen < 0 ? 'neg' : '');
@@ -109,7 +108,7 @@
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${U.esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
-      ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
+      ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(U.esc).join('、')}）</button><div class="gap"></div>` : ''}
       <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
       <div class="gap"></div>
       <button class="btn" onclick="App.goJoinRoom()">加入联机场</button>
@@ -154,7 +153,7 @@
           <input type="text" id="newName" placeholder="新玩家名字（8 字以内）" maxlength="8">
           <button class="btn btn-sm" onclick="App.addPlayer()">添加</button>
         </div>
-        ${sel.length ? `<div class="muted" style="margin-top:10px">已选 ${sel.length} 人：${sel.map(esc).join('、')}</div>` : ''}
+        ${sel.length ? `<div class="muted" style="margin-top:10px">已选 ${sel.length} 人：${sel.map(U.esc).join('、')}</div>` : ''}
         ${isOnline ? '<div class="muted" style="margin-top:10px">这里选的人就是房间里的座位。建好后把二维码发给牌友，他们扫码认领自己的名字；没带手机的人你可以替 TA 入座。</div>' : ''}
       </div>
       <div class="card">
@@ -419,7 +418,7 @@
       ${bar}
       <div class="card">
         ${list.map((s) => {
-          const info = `<div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(esc).join('、')}</div></div>`;
+          const info = `<div><b>${fmtDate(s.createdAt)}</b><div class="muted">${s.players.map(U.esc).join('、')}</div></div>`;
           if (edit) {
             const on = sel.includes(s.id);
             const box = on
@@ -629,7 +628,7 @@
       }
     }
     if (activeCount > 1) return false;
-    return Array.from(names).every((n) => validName(n));
+    return Array.from(names).every((n) => U.validName(n));
   }
 
   const inviteLink = () => location.origin + location.pathname + '?room=' + online.code;
@@ -916,7 +915,7 @@
     renameDirName(name) {
       const next = (window.prompt('把「' + name + '」改为（不影响历史战绩）：', name) || '').trim();
       if (!next || next === name) return;
-      if (!validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (db.playerDirectory.includes(next)) { alert('名单里已有这个名字'); return; }
       view.price = document.getElementById('price').value;
       db.playerDirectory = db.playerDirectory.map((n) => (n === name ? next : n));
@@ -938,7 +937,7 @@
     addPlayer() {
       const inp = document.getElementById('newName');
       const name = inp.value.trim();
-      if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (db.playerDirectory.includes(name)) { alert('已有同名玩家，直接点选即可'); return; }
       view.price = document.getElementById('price').value;
       db.playerDirectory.push(name);
@@ -1073,7 +1072,7 @@
     async joinPlayer() {
       const s = sessionCtx();
       const name = document.getElementById('joinName').value.trim();
-      if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (s.players.includes(name)) { alert('这个名字本场已存在'); return; }
       if (s.activePlayers.length >= 8) { alert('在场玩家已达 8 人上限'); return; }
       if (!db.playerDirectory.includes(name)) { db.playerDirectory.push(name); saveDB(); }
@@ -1102,7 +1101,7 @@
       if (online.active && !isOwner()) { alert('只有房主可以改名'); return; }
       const next = (window.prompt('把「' + oldName + '」改成：', oldName) || '').trim();
       if (!next || next === oldName) return;
-      if (!validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (!U.validName(next)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
       if (s.players.includes(next)) { alert('这个名字本场已存在'); return; }
       const rn = (x) => {
         x.players = x.players.map((n) => (n === oldName ? next : n));
