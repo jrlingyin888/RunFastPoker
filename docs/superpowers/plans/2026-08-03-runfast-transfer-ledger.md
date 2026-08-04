@@ -373,6 +373,8 @@ function isValidTx(v, players) {
 // 因此不存在「同一格互相覆盖」的并发冲突，也就没有房主特权可言。
 function canPatch(old, path, value, me) {
   if (!me || !old || typeof path !== 'string') return false;
+  // 路径段是客户端可控的：__proto__ / constructor 会让 setPath 写进原型链，污染整个进程
+  if (path.split('/').some((k) => k === '__proto__' || k === 'constructor' || k === 'prototype')) return false;
   const players = (old.players && typeof old.players === 'object') ? old.players : {};
 
   // 记一笔转账：只收没用过的 id。已存在的 id 一律拒 → 流水只增不删、不可篡改。
@@ -390,11 +392,12 @@ function canPatch(old, path, value, me) {
       && (value.uid === me || value.uid === null || value.uid === undefined);
   }
 
-  // 改玩家字段
+  // 改玩家字段。用 hasOwnProperty 取值：裸下标会取到原型链上的成员，
+  // 那些成员 .uid 恒为 undefined，会被误判成「没设备的代记玩家，谁都能改名」。
   m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})\/(name|left|leftAt)$/);
   if (m) {
+    if (!Object.prototype.hasOwnProperty.call(players, m[1])) return false;
     const p = players[m[1]];
-    if (!p) return false;
     if (m[2] === 'name') return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
     return p.uid === me;                                        // 退出/回归只能自己来
   }
