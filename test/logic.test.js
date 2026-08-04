@@ -221,3 +221,28 @@ test('settleUp / summaryText 吃只有 transfers 的场', () => {
   assert.ok(txt.includes('张三：+8 元'));
   assert.ok(txt.includes('李四 → 张三：5 元'));
 });
+
+test('sessionNet：流水引用了不在 players 里的名字会被丢弃（既有行为，此处钉住）', () => {
+  const s = {
+    players: ['张三'],
+    pricePerCardFen: 100,
+    rounds: [],
+    transfers: [{ id: 't1', from: '查无此人', to: '张三', points: 5, at: 1 }],
+  };
+  // 只按 players 取值，付款方那条被丢掉 → 返回结果里净额总和不再为 0。
+  // 新模型的流水存的是 pid、且玩家只增不删，结构上不会走到这里；
+  // 万一哪天变成按名字存，这条会先红，提醒你补校验。
+  assert.deepEqual(L.sessionNet(s), [{ name: '张三', cards: 5, fen: 500 }]);
+});
+
+test('sessionNet：只有 transfers、连 rounds 字段都没有的场也能算', () => {
+  const s = {
+    players: ['张三', '李四'],
+    pricePerCardFen: 100,
+    transfers: [{ id: 't1', from: '李四', to: '张三', points: 7, at: 1 }],
+  };
+  assert.deepEqual(L.sessionNet(s), [
+    { name: '张三', cards: 7, fen: 700 },
+    { name: '李四', cards: -7, fen: -700 },
+  ]);
+});
