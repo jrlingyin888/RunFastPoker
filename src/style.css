@@ -46,10 +46,6 @@ h1 { font-size: 24px; color: var(--gold-soft); text-shadow: 0 1px 2px rgba(0,0,0
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { padding: 10px 16px; border-radius: 999px; background: #f6f1e2; border: 1.5px solid #d1cbb8; font-size: 16px; cursor: pointer; color: var(--ink); }
 .chip.on { background: var(--felt-light); border-color: var(--gold); color: var(--gold-soft); font-weight: 700; }
-.numgrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
-.numgrid button { padding: 12px 0; border-radius: 9px; border: 1px solid #d1cbb8; background: #fff; font-size: 17px; font-weight: 600;
-  color: var(--ink); cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
-.numgrid button.on { background: var(--felt-light); color: var(--gold-soft); border-color: var(--gold); }
 .overlay { position: fixed; inset: 0; background: rgba(4,24,13,.72); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
 input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; border-radius: 10px; font-size: 16px; background: #fff; color: var(--ink); }
 .muted { color: rgba(255,253,246,.78); font-size: 13px; }
@@ -82,3 +78,35 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
   background: var(--felt-light); color: var(--gold-soft); font-size: 12px; font-weight: 700; }
 .proxy-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
   background: var(--win); color: #fff4e6; font-size: 12px; font-weight: 700; }  /* 代占的座位：暖琥珀，和绿色「我」区分开 */
+/* 头像行：谁赢了点谁 */
+.players { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.seat { flex: 0 0 auto; width: 64px; border: 0; background: none; padding: 0; cursor: pointer; color: var(--ink); }
+.seat .ava { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;
+  margin: 0 auto 5px; border-radius: 50%; color: #fff; font-size: 20px; font-weight: 700; }
+.seat .ava.add { background: none; border: 2px dashed #c8c2b0; color: #9a927c; font-size: 22px; }
+.seat .nm { display: block; font-size: 12px; line-height: 1.4; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.seat .pts { display: block; font-size: 13px; font-weight: 800; }
+.seat.me .ava { box-shadow: 0 0 0 2px var(--gold); }
+.seat.left { opacity: .45; }
+.left-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 999px;
+  background: #9ca3af; color: #fff; font-size: 11px; font-weight: 700; }
+.tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
+  border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.who { color: #1d4ed8; font-weight: 700; }
+.amt { font-weight: 800; font-size: 17px; flex-shrink: 0; }
+/* 支出弹窗 */
+.pay { position: relative; width: 100%; max-width: 340px; background: var(--cream); color: var(--ink);
+  border-radius: 18px; padding: 22px 18px 18px; }
+.pay .muted { color: #6b7280; }
+.pay-x { position: absolute; top: 6px; right: 10px; border: 0; background: none;
+  font-size: 26px; line-height: 1; color: #9ca3af; cursor: pointer; }
+.pay-head { display: flex; align-items: flex-start; justify-content: space-between; margin: 6px 0 16px; }
+.pay-who { flex: 1; border: 0; background: none; padding: 0; text-align: center; color: var(--ink); cursor: pointer; }
+.pay-who .ava { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px;
+  margin: 0 auto 5px; border-radius: 50%; color: #fff; font-size: 22px; font-weight: 700; }
+.pay-who .nm { display: block; font-size: 14px; font-weight: 700; }
+.pay-who .muted { display: block; font-size: 11px; margin-top: 2px; }
+.pay-arrow { flex: 0 0 90px; text-align: center; color: #6b7280; font-size: 14px; padding-top: 16px; line-height: 1.6; }
+.pay-hint { text-align: center; margin: 8px 0 14px; }
+.sheet-head { padding: 14px 16px 6px; text-align: center; font-weight: 700; color: var(--ink); }

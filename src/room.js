@@ -9,7 +9,7 @@ var RunfastRoom = (function () {
   // 宿主接线：app.js 启动时注入路由、名录、结束回调
   let host = {
     go() {}, render() {}, view() { return {}; },
-    directory() { return []; }, onFinished() {}, saveName() {},
+    directory() { return []; }, onFinished() {}, saveName() {}, saveLocal() {},
   };
   function init(h) { host = Object.assign(host, h); }
 
@@ -57,6 +57,188 @@ var RunfastRoom = (function () {
           `<button class="chip" onclick="Room.fillName('${esc(n)}')">${esc(n)}</button>`).join('')}</div>` : ''}
       </div>
       <button class="btn btn-primary" onclick="Room.confirmJoin()">${back ? '回到房间' : '进入房间'}</button>`;
+  }
+
+  // ---------- 本地单机 ----------
+  // 用本地场现搭一个同形状的房间：pid 就是名字（本地没有设备身份，也就没有「我」）。
+  function localRoom(session) {
+    const players = Object.create(null);
+    session.players.forEach((n, i) => { players[n] = { name: n, uid: null, at: i }; });
+    const tx = Object.create(null);
+    (session.transfers || []).forEach((t) => { tx[t.id] = t; });
+    return { creatorUid: null, sid: session.id, createdAt: session.createdAt,
+      pricePerCardFen: session.pricePerCardFen, status: session.status, players, tx };
+  }
+  function startLocal(session) {
+    resetState();   // 用 resetState 不用 close：别把「回到联机房间」的房号也顺手清了
+    state.active = true; state.local = true;
+    state.session = session; state.room = localRoom(session);
+    state.pid = null; state.status = 'connected';
+    host.go({ name: 'room' });
+  }
+  // 本地写入：直接改 db 里那条场，再让 app.js 落盘重绘
+  function localApply(fn) {
+    fn(state.session);
+    state.room = localRoom(state.session);
+    host.saveLocal();
+  }
+
+  // ---------- 净额与快照 ----------
+  // 每人当前净分。本地场可能还带着旧的 rounds，交给 logic 一起算。
+  function netOf() {
+    if (state.local) {
+      const out = Object.create(null);
+      L.sessionNet(state.session).forEach((p) => { out[p.name] = p.cards; });
+      return out;
+    }
+    const r = state.room, net = Object.create(null);
+    Object.keys(r.players).forEach((pid) => { net[pid] = 0; });
+    S.txList(r).forEach((t) => {
+      if (net[t.from] === undefined || net[t.to] === undefined) return;  // 引用了不存在的人，跳过
+      net[t.from] -= t.points;
+      net[t.to] += t.points;
+    });
+    return net;
+  }
+
+  // 把当前房间快照成一个 session：名字取快照，历史因此不依赖房间还在不在。
+  function snapshot() {
+    if (state.local) return state.session;
+    const r = state.room;
+    const nameOf = (pid) => (r.players[pid] || {}).name || '?';
+    const pids = Object.keys(r.players).sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0));
+    return {
+      id: r.sid,
+      createdAt: r.createdAt,
+      pricePerCardFen: r.pricePerCardFen,
+      players: pids.map(nameOf),
+      status: r.status === 'finished' ? 'finished' : 'active',
+      finishedAt: r.finishedAt,
+      rounds: [],
+      transfers: S.txList(r).map((t) => ({ id: t.id, from: nameOf(t.from), to: nameOf(t.to),
+        points: t.points, at: t.at })),
+    };
+  }
+
+  // ---------- 记分主页 ----------
+  function seatHtml(pid, points) {
+    const p = state.room.players[pid];
+    const left = !!p.left;
+    const tag = left ? '<span class="left-tag">已退出</span>'
+      : (!state.local && pid === state.pid) ? '<span class="me-tag">我</span>'
+      : (!state.local && p.uid == null) ? '<span class="proxy-tag">代</span>' : '';
+    const sign = points > 0 ? '+' : '';
+    return `<button class="seat${left ? ' left' : ''}${(!state.local && pid === state.pid) ? ' me' : ''}"
+        onclick="Room.tapSeat('${esc(pid)}')">
+      <span class="ava" style="background:${U.avatarColor(p.name)}">${esc(U.initial(p.name))}</span>
+      <span class="nm">${esc(p.name)}${tag}</span>
+      <span class="pts ${points > 0 ? 'pos' : points < 0 ? 'neg' : ''}">${sign}${points}</span>
+    </button>`;
+  }
+
+  function txRowHtml(t) {
+    const r = state.room;
+    const from = r.players[t.from], to = r.players[t.to];
+    if (!from || !to) return '';
+    // 代记：提交这笔的设备不是付款人本人（本地单机没有设备身份，不标）
+    const proxy = (!state.local && t.byUid && from.uid !== t.byUid) ? deviceName(t.byUid) : '';
+    return `<div class="row">
+      <span><b class="who">${esc(from.name)}</b> 记分给 <b class="who">${esc(to.name)}</b>${
+        proxy ? ` <span class="proxy-tag">${esc(proxy)}代记</span>` : ''}</span>
+      <span class="amt">${t.points}</span>
+    </div>`;
+  }
+  // 设备 id → 该设备绑定的玩家名（找不到就空字符串）
+  function deviceName(uid) {
+    const ps = state.room.players;
+    const pid = Object.keys(ps).find((k) => ps[k].uid === uid);
+    return pid ? ps[pid].name : '';
+  }
+
+  function roomView() {
+    const r = state.room;
+    if (!r) return '';
+    const price = L.fenToYuan(r.pricePerCardFen);
+    const list = S.txList(r).slice().reverse();          // 最新在上
+    const net = netOf();
+    const pids = Object.keys(r.players).sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0));
+    const actions = (state.local ? '' : '<button class="icon-btn" onclick="Room.share()">分享</button>')
+      + '<button class="icon-btn" onclick="Room.more()">⋯</button>';
+    const bar = state.local ? ''
+      : `<div class="sync-bar"><span><span class="sync-dot ${state.status === 'connected' ? '' : 'off'}"></span>房号 ${esc(state.code)} · ${S.playingCount(r)} 人在玩</span></div>`;
+    return `
+      ${U.topbar('已记 ' + S.txList(r).length + ' 笔 · ' + price + '元/张', state.local ? 'App.goHome()' : '', actions)}
+      ${bar}
+      <div class="card">
+        <div class="players">
+          ${pids.map((pid) => seatHtml(pid, net[pid] || 0)).join('')}
+          <button class="seat" onclick="Room.addMenu()">
+            <span class="ava add">＋</span><span class="nm">加人</span><span class="pts">&nbsp;</span>
+          </button>
+        </div>
+      </div>
+      <div class="tip">谁赢了就点谁的头像${state.local ? '' : ' · 点自己头像改名或退出'}</div>
+      <div class="card">
+        ${list.map(txRowHtml).join('') || '<div class="muted">还没有记录，谁赢了就点谁的头像</div>'}
+      </div>`;
+  }
+
+  // ---------- 支出弹窗 ----------
+  // 独立的 overlay（不走 openSheet），因为要控制「校验没过时不关窗」。
+  function closePay() {
+    const el = document.getElementById('pay');
+    if (el) el.remove();
+    state.payFrom = null; state.payTo = null;
+  }
+  function openPay(toPid) {
+    state.payTo = toPid;
+    // 联机默认「我付」；本地单机没有「我」，沿用上次选的付款人
+    if (!state.local) state.payFrom = state.pid;
+    if (!state.payFrom || state.payFrom === toPid || !state.room.players[state.payFrom]) {
+      state.payFrom = Object.keys(state.room.players)
+        .find((pid) => pid !== toPid && !state.room.players[pid].left) || null;
+    }
+    if (!state.payFrom) { alert('房间里还没有别人，先加个人吧'); return; }
+    renderPay();
+  }
+  function renderPay() {
+    const r = state.room;
+    const from = r.players[state.payFrom], to = r.players[state.payTo];
+    const keep = (document.getElementById('payPoints') || {}).value || '';
+    let el = document.getElementById('pay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'pay';
+      el.className = 'overlay';
+      document.body.appendChild(el);
+    }
+    el.innerHTML = `<div class="pay">
+      <button class="pay-x" onclick="Room.closePay()">×</button>
+      <div class="pay-head">
+        <button class="pay-who" onclick="Room.pickPayer()">
+          <span class="ava" style="background:${U.avatarColor(from.name)}">${esc(U.initial(from.name))}</span>
+          <span class="nm">${esc(from.name)} ▾</span><span class="muted">点这里换人</span>
+        </button>
+        <div class="pay-arrow"><div>支出 分数</div><div>→</div></div>
+        <div class="pay-who">
+          <span class="ava" style="background:${U.avatarColor(to.name)}">${esc(U.initial(to.name))}</span>
+          <span class="nm">${esc(to.name)}</span><span class="muted">赢家</span>
+        </div>
+      </div>
+      <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出分数"
+             value="${esc(keep)}" oninput="Room.previewPay(this.value)">
+      <div class="muted pay-hint" id="payHint">${payHint(keep)}</div>
+      <button class="btn btn-primary" onclick="Room.submitPay()">支出</button>
+    </div>`;
+    const inp = document.getElementById('payPoints');
+    if (inp) inp.focus();
+  }
+  // 输入实时折算成钱；没填就提示单价
+  function payHint(v) {
+    const n = Number(String(v).trim());
+    const price = state.room.pricePerCardFen;
+    if (!Number.isInteger(n) || n <= 0) return '1 分 = ' + L.fenToYuan(price) + ' 元 · 全关就输 20';
+    return n + ' 分 = ' + L.fenToYuan(n * price) + ' 元';
   }
 
   // ---------- 订阅并进入记分页 ----------
@@ -155,11 +337,80 @@ var RunfastRoom = (function () {
       close();
       host.go({ name: 'home' });
     },
+
+    tapSeat(pid) {
+      const p = state.room.players[pid];
+      if (!p) return;
+      if (p.left) { alert('该用户已退出房间'); return; }
+      if (!state.local && pid === state.pid) { Room.mePanel(); return; }
+      openPay(pid);
+    },
+
+    closePay() { closePay(); },
+    previewPay(v) {
+      const el = document.getElementById('payHint');
+      if (el) el.textContent = payHint(v);
+    },
+    pickPayer() {
+      const r = state.room;
+      const items = Object.keys(r.players)
+        .filter((pid) => !r.players[pid].left && pid !== state.payTo)
+        .sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0))
+        .map((pid) => ({
+          label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
+          onclick: `Room.setPayer('${esc(pid)}')`,
+        }));
+      U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
+    },
+    setPayer(pid) { state.payFrom = pid; renderPay(); },
+
+    async submitPay() {
+      const raw = ((document.getElementById('payPoints') || {}).value || '').trim();
+      const n = Number(raw);
+      if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) {
+        alert('请输入 1～9999 的整数分数'); return;
+      }
+      const from = state.payFrom, to = state.payTo;
+      if (from === to) { alert('不能给自己记分'); return; }
+      const tx = { from, to, points: n, byUid: state.uid || null, at: Date.now() };
+      if (state.local) {
+        localApply((s) => {
+          s.transfers = (s.transfers || []).concat([{ id: S.newKey('t_'),
+            from: state.room.players[from].name, to: state.room.players[to].name, points: n, at: tx.at }]);
+        });
+        closePay();
+        return;
+      }
+      try {
+        await S.patch(state.code, '/tx/' + S.newKey('t_'), tx);
+        closePay();
+      } catch (e) { alert('记分失败，请重试：' + e.message); }
+    },
+
+    // mePanel / more / share 在 Task 7 补齐。做完 Task 6 时点自己头像或「⋯」会报
+    // 「Room.mePanel is not a function」，这是预期的，别当成 bug 去改。
+
+    // ＋：邀请牌友扫码 / 直接加没带手机的人
+    addMenu() {
+      const items = [{ label: '➕ 加没带手机的人', onclick: 'Room.addOffline()' }];
+      if (!state.local) items.unshift({ label: '📤 邀请牌友扫码', onclick: 'Room.share()' });
+      U.openSheet(items);
+    },
+    async addOffline() {
+      const name = (window.prompt('加个人（没带手机的，大家都能替 TA 记分）：', '') || '').trim();
+      if (!name) return;
+      if (!U.validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }
+      if (S.nameTaken(state.room, name)) { alert('房间里已经有人叫这个名字了'); return; }
+      host.saveName(name);
+      if (state.local) { localApply((s) => { s.players.push(name); }); return; }
+      try { await S.patch(state.code, '/players/' + S.newKey('p_'), { name, uid: null, at: Date.now() }); }
+      catch (e) { alert('加人失败：' + e.message); }
+    },
   };
   if (typeof window !== 'undefined') window.Room = Room;
 
-  const api = { init, preview, attach, close, lastName, state,
-    views: { joinName: joinView } };
+  const api = { init, preview, attach, close, lastName, startLocal, snapshot, state,
+    views: { joinName: joinView, room: roomView } };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
