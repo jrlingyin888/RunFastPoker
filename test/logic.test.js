@@ -158,3 +158,66 @@ test('sessionNet：玩家名与原型属性同名也能正确结算', () => {
     { name: 'valueOf', cards: -3, fen: -300 },
   ]);
 });
+
+test('sessionNet：转账流水的净额（from 减、to 加，顺序同 players）', () => {
+  const s = {
+    players: ['张三', '李四', '王五'],
+    pricePerCardFen: 100,
+    rounds: [],
+    transfers: [
+      { id: 't1', from: '李四', to: '张三', points: 4, at: 1 },
+      { id: 't2', from: '王五', to: '张三', points: 20, at: 2 },
+      { id: 't3', from: '张三', to: '李四', points: 2, at: 3 },
+    ],
+  };
+  assert.deepEqual(L.sessionNet(s), [
+    { name: '张三', cards: 22, fen: 2200 },
+    { name: '李四', cards: -2, fen: -200 },
+    { name: '王五', cards: -20, fen: -2000 },
+  ]);
+});
+
+test('sessionNet：rounds 与 transfers 相加（旧场用新界面接着记）', () => {
+  const s = {
+    players: ['张三', '李四'],
+    pricePerCardFen: 50,
+    rounds: [{ id: 'r1', winner: '张三', losers: [{ name: '李四', cardsLeft: 3, shutout: false }] }],
+    transfers: [{ id: 't1', from: '张三', to: '李四', points: 1, at: 1 }],
+  };
+  assert.deepEqual(L.sessionNet(s), [
+    { name: '张三', cards: 2, fen: 100 },
+    { name: '李四', cards: -2, fen: -100 },
+  ]);
+});
+
+test('sessionNet：没有 transfers 字段的旧场行为不变', () => {
+  const s = {
+    players: ['张三', '李四'],
+    pricePerCardFen: 100,
+    rounds: [{ id: 'r1', winner: '张三', losers: [{ name: '李四', cardsLeft: 4, shutout: false }] }],
+  };
+  assert.deepEqual(L.sessionNet(s), [
+    { name: '张三', cards: 4, fen: 400 },
+    { name: '李四', cards: -4, fen: -400 },
+  ]);
+});
+
+test('settleUp / summaryText 吃只有 transfers 的场', () => {
+  const s = {
+    createdAt: '2026-08-03T10:00:00.000Z',
+    players: ['张三', '李四', '王五'],
+    pricePerCardFen: 100,
+    rounds: [],
+    transfers: [
+      { id: 't1', from: '李四', to: '张三', points: 5, at: 1 },
+      { id: 't2', from: '王五', to: '张三', points: 3, at: 2 },
+    ],
+  };
+  assert.deepEqual(L.settleUp(L.sessionNet(s)), [
+    { from: '李四', to: '张三', fen: 500 },
+    { from: '王五', to: '张三', fen: 300 },
+  ]);
+  const txt = L.summaryText(s);
+  assert.ok(txt.includes('张三：+8 元'));
+  assert.ok(txt.includes('李四 → 张三：5 元'));
+});

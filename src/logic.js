@@ -40,16 +40,35 @@ var RunfastLogic = (function () {
       });
   }
 
-  // 整场累计净额。包含 session.players 中所有人（未参局者为 0），顺序同 players。
+  // 转账流水对净额的贡献：一笔 = from 减 points 分、to 加 points 分。
+  // 返回 {名字: 净分}，只含流水里出现过的人。
+  function transferNet(session) {
+    const out = Object.create(null);
+    (session.transfers || []).forEach((t) => {
+      out[t.from] = (out[t.from] || 0) - t.points;
+      out[t.to] = (out[t.to] || 0) + t.points;
+    });
+    return out;
+  }
+
+  // 整场累计净额。同时吃「按局记」的 rounds 和「按笔记」的 transfers，两者相加——
+  // 历史旧场只有 rounds、新场只有 transfers，没打完的旧场两边都有，因而不需要数据迁移。
+  // 包含 session.players 中所有人（未参与者为 0），顺序同 players。
   function sessionNet(session) {
     const net = Object.create(null);
     const entry = (n) => (net[n] ||= { name: n, cards: 0, fen: 0 });
     session.players.forEach(entry);
-    session.rounds.forEach((round) => {
+    (session.rounds || []).forEach((round) => {
       roundTransfers(round, session.pricePerCardFen).forEach((t) => {
         entry(t.from).cards -= t.cards; entry(t.from).fen -= t.fen;
         entry(t.to).cards += t.cards;   entry(t.to).fen += t.fen;
       });
+    });
+    const tn = transferNet(session);
+    Object.keys(tn).forEach((n) => {
+      const e = entry(n);
+      e.cards += tn[n];
+      e.fen += tn[n] * session.pricePerCardFen;
     });
     return session.players.map((n) => net[n]);
   }
@@ -95,7 +114,7 @@ var RunfastLogic = (function () {
     return lines.join('\n');
   }
 
-  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, sessionNet, settleUp, summaryText };
+  const api = { HAND_SIZE, yuanToFen, fenToYuan, countedCards, roundTransfers, transferNet, sessionNet, settleUp, summaryText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
