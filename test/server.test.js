@@ -39,12 +39,6 @@ test('injectHostFlag：有占位注释则替换为主机标志脚本，无则原
   assert.equal(injectHostFlag(noPlaceholder), noPlaceholder);
 });
 
-test('canWrite：建房只能把自己登记为房主', () => {
-  assert.ok(canWrite(null, { creatorUid: 'me' }, 'me'));
-  assert.ok(!canWrite(null, { creatorUid: 'other' }, 'me'));
-  assert.ok(!canWrite(null, { creatorUid: 'me' }, undefined));
-});
-
 test('canWrite：只允许建房，房间已存在则禁止整房覆盖', () => {
   assert.ok(canWrite(null, { creatorUid: 'me' }, 'me'));
   assert.ok(!canWrite(null, { creatorUid: 'other' }, 'me'));
@@ -107,6 +101,17 @@ test('canPatch：结束本场全开放，其他路径一律拒', () => {
   assert.ok(!canPatch(r, '/pricePerCardFen', 999, 'x'));
   assert.ok(!canPatch(r, '/', {}, 'x'));
   assert.ok(!canPatch(null, '/tx/t_9', {}, 'x'));               // 房间不存在
+});
+
+test('canPatch / setPath：拒绝写进原型链，杜绝远程原型污染', () => {
+  const r = sampleRoom();
+  assert.ok(!canPatch(r, '/players/__proto__/name', 'PWNED', 'evil'));
+  assert.ok(!canPatch(r, '/players/__proto__', { name: 'x', uid: null }, 'evil'));
+  assert.ok(!canPatch(r, '/players/constructor/name', 'PWNED', 'evil'));
+  assert.ok(!canPatch(r, '/players/hasOwnProperty/name', 'PWNED', 'evil'));
+  assert.ok(!canPatch(r, '/tx/__proto__', { from: 'p_b', to: 'p_a', points: 1 }, 'evil'));
+  setPath({ players: {} }, '/players/__proto__/name', 'PWNED');
+  assert.equal({}.name, undefined);   // 原型没被污染
 });
 
 test('REST：建房只此一次/房间已存在后整房覆盖一律拒/删房/GET 不存在为 null', async () => {
@@ -260,6 +265,69 @@ test('REST PATCH：三台设备同时记分，三笔全部入账互不覆盖', a
     const after = JSON.parse((await req(port, 'GET', '/rooms/300400')).body);
     assert.equal(after.tx.t_x1.from, 'p_b');
   } finally { server.close(); fs.rmSync(df, { force: true }); }
+});
+
+test('REST PATCH：走真实 HTTP 打原型污染路径，应 403 且不留后患', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300500', sampleRoom(), { 'X-Device-Id': 'boss' });
+    const r = await req(port, 'PATCH', '/rooms/300500',
+      { path: '/players/__proto__/name', value: 'PWNED' }, { 'X-Device-Id': 'evil' });
+    assert.equal(r.status, 403);
+    assert.equal(({}).name, undefined); // 全局 Object.prototype 没被污染
+
+    // 挨这一下之后服务器还得能正常接单，不能被这次攻击拖垮
+    const ok = await req(port, 'GET', '/rooms/300500');
+    assert.equal(JSON.parse(ok.body).creatorUid, 'boss');
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PATCH：body 是合法 JSON 的 null 不该崩进程，返回 400 且后续请求仍正常', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300600', sampleRoom(), { 'X-Device-Id': 'boss' });
+    const r = await req(port, 'PATCH', '/rooms/300600', null, { 'X-Device-Id': 'boss' });
+    assert.equal(r.status, 400);
+
+    const ok = await req(port, 'GET', '/rooms/300600'); // 进程没被打挂，还能正常响应下一个请求
+    assert.equal(JSON.parse(ok.body).creatorUid, 'boss');
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PATCH：byUid 由服务端按 X-Device-Id 覆写，客户端填的会被无视', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300700', sampleRoom(), { 'X-Device-Id': 'boss' });
+    const r = await req(port, 'PATCH', '/rooms/300700',
+      { path: '/tx/t_fake', value: { from: 'p_b', to: 'p_a', points: 4, byUid: '别人的设备id' } },
+      { 'X-Device-Id': 'x' });
+    assert.equal(r.status, 200);
+    const room = JSON.parse((await req(port, 'GET', '/rooms/300700')).body);
+    assert.equal(room.tx.t_fake.byUid, 'x'); // 不是客户端伪造的那个，是请求头里真实的设备 id
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PATCH：建玩家做字段白名单，杂字段（含 left）落库前被剥离', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300800', sampleRoom(), { 'X-Device-Id': 'boss' });
+    const r = await req(port, 'PATCH', '/rooms/300800',
+      { path: '/players/p_new', value: { name: '幽灵', uid: null, left: true, leftAt: 999, extra: 'x' } },
+      { 'X-Device-Id': 'boss' });
+    assert.equal(r.status, 200);
+    const room = JSON.parse((await req(port, 'GET', '/rooms/300800')).body);
+    assert.deepEqual(Object.keys(room.players.p_new).sort(), ['at', 'name', 'uid']); // 只剩三个白名单字段
+    assert.equal(room.players.p_new.name, '幽灵');
+    assert.equal(room.players.p_new.uid, null);
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 
 test('/qr：正常返回内联 SVG；缺 text 或超长返回 400', async () => {

@@ -119,6 +119,9 @@ function canWrite(old, neu, me) {
 function setPath(obj, path, value) {
   if (!path || path === '/') return value;
   const keys = path.replace(/^\//, '').split('/');
+  // 纵深防御：canPatch 已经挡了 __proto__/constructor/prototype，这里再兜一层——
+  // setPath 才是真正往对象里写值的原语，就算上层校验将来出现疏漏，也不能从这里污染原型链。
+  if (keys.some((k) => k === '__proto__' || k === 'constructor' || k === 'prototype')) return obj;
   const next = obj ? JSON.parse(JSON.stringify(obj)) : {};
   let node = next;
   for (let i = 0; i < keys.length - 1; i++) {
@@ -144,6 +147,8 @@ function isValidTx(v, players) {
 // 因此不存在「同一格互相覆盖」的并发冲突，也就没有房主特权可言。
 function canPatch(old, path, value, me) {
   if (!me || !old || typeof path !== 'string') return false;
+  // 路径段是客户端可控的：__proto__ / constructor 会让 setPath 写进原型链，污染整个进程
+  if (path.split('/').some((k) => k === '__proto__' || k === 'constructor' || k === 'prototype')) return false;
   const players = (old.players && typeof old.players === 'object') ? old.players : {};
 
   // 记一笔转账：只收没用过的 id。已存在的 id 一律拒 → 流水只增不删、不可篡改。
@@ -161,11 +166,13 @@ function canPatch(old, path, value, me) {
       && (value.uid === me || value.uid === null || value.uid === undefined);
   }
 
-  // 改玩家字段
+  // 改玩家字段。先用 hasOwnProperty 确认这是真实存在的玩家 key，再取值——
+  // 否则 'hasOwnProperty'/'toString' 这类不在黑名单里、但原型链上本来就有的名字，
+  // 裸下标 players[m[1]] 也能取出一个真值，被当成「没设备的代记玩家」放行。
   m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})\/(name|left|leftAt)$/);
   if (m) {
+    if (!Object.prototype.hasOwnProperty.call(players, m[1])) return false;
     const p = players[m[1]];
-    if (!p) return false;
     if (m[2] === 'name') return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
     return p.uid === me;                                        // 退出/回归只能自己来
   }
@@ -300,7 +307,27 @@ function createRunfastServer(options = {}) {
         const me = req.headers['x-device-id'];
         let payload;
         try { payload = JSON.parse(await readBody(req)); } catch (e) { json(res, 400, { error: 'bad json' }); return; }
+        // body 可能是合法 JSON 但不是对象（比如裸的 null）：JSON.parse 不会抛，但接下来读 payload.path
+        // 就会抛 TypeError，逃出这个 try 之后没人接得住（async handler 的 rejection 没人 catch），
+        // 直接把整个进程打挂。一条 curl 就能秒杀公网服务，必须单独挡。
+        if (!payload || typeof payload !== 'object') { json(res, 400, { error: 'bad json' }); return; }
+        if (typeof payload.path === 'string' && payload.value && typeof payload.value === 'object') {
+          if (payload.path.startsWith('/tx/')) {
+            // 「这笔是谁记的」由服务端按身份头覆写，客户端传什么都不作数——
+            // 前端要靠这个字段判断「别人代记」并显示提示，能伪造这个字段就等于白记。
+            payload.value.byUid = me;
+          } else if (/^\/players\/[^/]+$/.test(payload.path)) {
+            // 建玩家的字段白名单：只认 name/uid/at，防止夹带 left:true 之类的字段——
+            // 否则一个刚建好的玩家能直接生下来就是「已退出」态，而清 left 要求 uid===me、
+            // uid=null 的代记玩家永远满足不了这条，等于这个人再也回不来。
+            const at = Number.isFinite(payload.value.at) ? payload.value.at : Date.now();
+            payload.value = { name: payload.value.name, uid: payload.value.uid, at };
+          }
+        }
         const old = rooms[code] || null;
+        // 从这里到下面写回 rooms[code] 为止不能出现 await：必须在同一个事件循环 tick 内原子完成，
+        // 这是「已存在的 tx/players key 一律拒绝覆盖」在并发请求下依然成立的前提——
+        // 一旦中间让出线程，两个并发请求就可能都读到「还没这个 key」从而先后覆盖同一笔。
         if (!canPatch(old, payload.path, payload.value, me)) { json(res, 403, { error: 'forbidden' }); return; }
         rooms[code] = setPath(old, payload.path, payload.value);
         scheduleSave(); broadcast(code);
