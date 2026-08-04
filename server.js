@@ -107,13 +107,12 @@ function hostPage(url) {
 </body></html>`;
 }
 
-// ---------- 权限校验（服务器强制，等价 v1.1 Firebase 规则）----------
+// ---------- 权限校验（服务器强制）----------
+// 建房走 PUT，此后一切增量走 PATCH——房间已存在时禁止整房覆盖，避免有人拿旧快照盖掉别人刚记的分。
 function canWrite(old, neu, me) {
   if (!me) return false;
-  if (!old) return !!neu && neu.creatorUid === me;                 // 建房：登记自己为房主
-  if (old.creatorUid === me) return true;                          // 房主全权
-  return old.allowEdit === true && !!neu &&                        // 他人：仅 allowEdit 且不篡改房主/权限位
-    neu.creatorUid === old.creatorUid && neu.allowEdit === old.allowEdit;
+  if (old) return false;
+  return !!neu && neu.creatorUid === me;
 }
 
 // 按路径深设：'/a/b/2/c' → 设 obj.a.b[2].c=value（value 为 null 删该键）。返回新对象，不改原对象。
@@ -132,26 +131,51 @@ function setPath(obj, path, value) {
   return next;
 }
 
-// 字段级写权限（服务器强制）。me=X-Device-Id。
+// 一笔转账是否合法：双方都得是房内玩家、不能自己转自己、分数是正整数。
+function isValidTx(v, players) {
+  if (!v || typeof v !== 'object') return false;
+  const has = (k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(players, k);
+  return has(v.from) && has(v.to) && v.from !== v.to
+    && Number.isInteger(v.points) && v.points > 0 && v.points <= 9999;
+}
+
+// 字段级写权限（服务器强制）。me = X-Device-Id。
+// 房间模型是扁平 map：players/tx 的 key 由客户端生成，谁都能往自己的新 key 上写，
+// 因此不存在「同一格互相覆盖」的并发冲突，也就没有房主特权可言。
 function canPatch(old, path, value, me) {
-  if (!me || !old) return false;                       // 房间须已存在（建房走 PUT）
-  const isCreator = old.creatorUid === me;
-  const seats = Array.isArray(old.seats) ? old.seats : [];
-  const holdsSeat = seats.some((s) => s && s.claimedBy === me);
-  const m = path.match(/^\/seats\/(\d+)\/claimedBy$/);
+  if (!me || !old || typeof path !== 'string') return false;
+  const players = (old.players && typeof old.players === 'object') ? old.players : {};
+
+  // 记一笔转账：只收没用过的 id。已存在的 id 一律拒 → 流水只增不删、不可篡改。
+  let m = path.match(/^\/tx\/([A-Za-z0-9_-]{1,64})$/);
   if (m) {
-    const seat = seats[Number(m[1])];
-    if (!seat) return false;
-    if (value === me && seat.claimedBy == null) return true;                 // 抢空座(CAS)
-    if (value == null && (isCreator || seat.claimedBy === me)) return true;  // 释放(房主或本人)
-    return false;
+    if (Object.prototype.hasOwnProperty.call(old.tx || {}, m[1])) return false;
+    return isValidTx(value, players);
   }
-  if (/^\/draft\/entries\/\d+$/.test(path)) {                                // 填某座那格
-    const seat = seats[Number(path.split('/').pop())];
-    return !!seat && (seat.claimedBy === me || isCreator);
+
+  // 建玩家：只收没用过的 id；uid 只能填自己或 null（代记没带手机的人）。
+  m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})$/);
+  if (m) {
+    if (Object.prototype.hasOwnProperty.call(players, m[1])) return false;
+    return !!value && typeof value === 'object' && typeof value.name === 'string'
+      && (value.uid === me || value.uid === null || value.uid === undefined);
   }
-  if (path === '/draft/winner' || path === '/draft') return holdsSeat || isCreator; // 定赢家/清草稿
-  return isCreator;                                                          // phase/seats结构/session 等仅房主
+
+  // 改玩家字段
+  m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})\/(name|left|leftAt)$/);
+  if (m) {
+    const p = players[m[1]];
+    if (!p) return false;
+    if (m[2] === 'name') return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
+    return p.uid === me;                                        // 退出/回归只能自己来
+  }
+
+  // uid 在建玩家那一刻定死，之后谁都不能改 —— 身份没法被抢。
+  if (/^\/players\/[^/]+\/uid$/.test(path)) return false;
+
+  if (path === '/status') return value === 'active' || value === 'finished';
+  if (path === '/finishedAt') return true;                      // 结束本场全开放
+  return false;
 }
 
 // ---------- 服务器工厂（每实例独立房间与数据文件，便于测试隔离）----------
@@ -161,34 +185,6 @@ function createRunfastServer(options = {}) {
   try { rooms = JSON.parse(fs.readFileSync(dataFile, 'utf8')) || {}; } catch (e) { rooms = {}; }
 
   const subscribers = new Map(); // code -> Set<res>
-  const presence = new Map();    // code -> Map<deviceId, refCount>（在线名单，临时态，不落地）
-  function presenceDevices(code) {
-    const mm = presence.get(code);
-    return mm ? Array.from(mm.keys()) : [];
-  }
-  function sendPresence(res, code) {
-    res.write('event: presence\n');
-    res.write('data: ' + JSON.stringify({ devices: presenceDevices(code) }) + '\n\n');
-  }
-  function broadcastPresence(code) {
-    const set = subscribers.get(code);
-    if (!set) return;
-    for (const res of set) sendPresence(res, code);
-  }
-  function addPresence(code, dev) {
-    let mm = presence.get(code);
-    if (!mm) { mm = new Map(); presence.set(code, mm); }
-    mm.set(dev, (mm.get(dev) || 0) + 1);
-    broadcastPresence(code);
-  }
-  function removePresence(code, dev) {
-    const mm = presence.get(code);
-    if (!mm) return;
-    const n = (mm.get(dev) || 0) - 1;
-    if (n <= 0) mm.delete(dev); else mm.set(dev, n);
-    if (!mm.size) presence.delete(code);
-    broadcastPresence(code);
-  }
   let saveTimer = null;
   function scheduleSave() {
     if (saveTimer) return;
@@ -284,13 +280,9 @@ function createRunfastServer(options = {}) {
         let set = subscribers.get(code);
         if (!set) { set = new Set(); subscribers.set(code, set); }
         set.add(res);
-        const dev = u.searchParams.get('dev');
-        if (dev) addPresence(code, dev);    // 登记并广播（含本连接）最新在线名单
-        else sendPresence(res, code);       // 无 dev 的连接也给一帧当前名单
         const hb = setInterval(() => res.write(':keep-alive\n\n'), 30000);
         req.on('close', () => {
           clearInterval(hb); set.delete(res); if (!set.size) subscribers.delete(code);
-          if (dev) removePresence(code, dev);
         });
         return;
       }
@@ -366,4 +358,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRunfastServer, canWrite, canPatch, setPath, lanIP, lanURL, reqBaseURL, qrSvg, injectHostFlag };
+module.exports = { createRunfastServer, canWrite, canPatch, isValidTx, setPath, lanIP, lanURL, reqBaseURL, qrSvg, injectHostFlag };
