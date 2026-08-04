@@ -158,10 +158,50 @@ test('canPatch：名字要过字符集校验（与前端 validName 一致），�
   assert.ok(!canPatch(r, '/players/p_a/name', '正常改名', 'x'));  // 名字合法但不是自己的，仍应拒
 });
 
+test('canPatch：房内名字唯一（建玩家/改名都挡），改回自己原名仍放行（评审 Critical 修复）', () => {
+  const r = sampleRoom();   // 房里已有 A / B / C
+  // 建玩家：撞已有名字一律拒，不管撞的是谁的（自己的、别人的、代记的）
+  assert.ok(!canPatch(r, '/players/p_new', { name: 'A', uid: 'x', at: 9 }, 'x'));
+  assert.ok(!canPatch(r, '/players/p_new', { name: 'B', uid: 'x', at: 9 }, 'x'));
+  assert.ok(!canPatch(r, '/players/p_new', { name: 'C', uid: null, at: 9 }, 'x')); // 代记的名字也占着
+  assert.ok(canPatch(r, '/players/p_new', { name: 'D', uid: 'x', at: 9 }, 'x'));
+  // 改名：撞别人的拒，改成没人用的放行，改回自己原名（等于没改）也要放行
+  assert.ok(!canPatch(r, '/players/p_b/name', 'A', 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/name', 'C', 'x'));
+  assert.ok(canPatch(r, '/players/p_b/name', 'B', 'x'));   // 自己原名
+  assert.ok(canPatch(r, '/players/p_b/name', 'B2', 'x'));
+});
+
+test('canWrite：建房时 players 内部重名一律拒（净额不为 0、备份导不回的源头）', () => {
+  const base = baseRoom();
+  assert.ok(!canWrite(null, { ...base, players: {
+    p_a: { name: '华', uid: 'me', at: 1 }, p_b: { name: '华', uid: null, at: 2 } } }, 'me'));
+  assert.ok(canWrite(null, { ...base, players: {
+    p_a: { name: '华', uid: 'me', at: 1 }, p_b: { name: '华仔', uid: null, at: 2 } } }, 'me'));
+});
+
+test('canPatch：left/leftAt 的值也要收窄（否则等于第二个 /finishedAt 放大口）', () => {
+  const r = sampleRoom();
+  assert.ok(canPatch(r, '/players/p_b/left', true, 'x'));
+  assert.ok(canPatch(r, '/players/p_b/left', null, 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/left', 'x'.repeat(500000), 'x'));  // 超大字符串
+  assert.ok(!canPatch(r, '/players/p_b/left', { a: 1 }, 'x'));
+  assert.ok(canPatch(r, '/players/p_b/leftAt', 123, 'x'));
+  assert.ok(canPatch(r, '/players/p_b/leftAt', null, 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/leftAt', 'x'.repeat(500000), 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/leftAt', { a: 1 }, 'x'));
+});
+
 test('canPatch：结束本场全开放，其他路径一律拒', () => {
   const r = sampleRoom();
   assert.ok(canPatch(r, '/status', 'finished', 'anyone'));
   assert.ok(canPatch(r, '/finishedAt', '2026-08-03T12:00:00.000Z', 'anyone'));
+  // finishedAt 会经各端 snapshot() 进本地历史：只收「一个 ISO 时间串的样子」
+  assert.ok(!canPatch(r, '/finishedAt', 'x'.repeat(65), 'anyone'));
+  assert.ok(!canPatch(r, '/finishedAt', 'x'.repeat(500000), 'anyone'));
+  assert.ok(!canPatch(r, '/finishedAt', { nested: { deep: 1 } }, 'anyone'));
+  assert.ok(!canPatch(r, '/finishedAt', 12345, 'anyone'));
+  assert.ok(!canPatch(r, '/finishedAt', null, 'anyone'));
   assert.ok(!canPatch(r, '/status', 'whatever', 'anyone'));
   assert.ok(!canPatch(r, '/creatorUid', 'me', 'x'));
   assert.ok(!canPatch(r, '/pricePerCardFen', 999, 'x'));
@@ -439,6 +479,72 @@ test('REST PATCH：建玩家做字段白名单，杂字段（含 left）落库�
     assert.deepEqual(Object.keys(room.players.p_new).sort(), ['at', 'name', 'uid']); // 只剩三个白名单字段
     assert.equal(room.players.p_new.name, '幽灵');
     assert.equal(room.players.p_new.uid, null);
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PATCH：两台设备先后用同一个名字，第二个 403；改名撞名 403，改回原名 200', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300900',
+      { creatorUid: 'devA', sid: 's1', createdAt: '2026-08-03T10:00:00.000Z', pricePerCardFen: 100,
+        status: 'active', players: { p_a: { name: '华', uid: 'devA', at: 1 } }, tx: {} },
+      { 'X-Device-Id': 'devA' });
+
+    // devB 想叫同一个「华」：客户端查的是十几秒前的快照可能漏过，服务端必须挡住
+    let r = await req(port, 'PATCH', '/rooms/300900',
+      { path: '/players/p_b', value: { name: '华', uid: 'devB', at: 2 } }, { 'X-Device-Id': 'devB' });
+    assert.equal(r.status, 403);
+    // 换个名字就能进
+    r = await req(port, 'PATCH', '/rooms/300900',
+      { path: '/players/p_b', value: { name: '华仔', uid: 'devB', at: 2 } }, { 'X-Device-Id': 'devB' });
+    assert.equal(r.status, 200);
+    // 改名撞已有的名字 → 403
+    r = await req(port, 'PATCH', '/rooms/300900',
+      { path: '/players/p_b/name', value: '华' }, { 'X-Device-Id': 'devB' });
+    assert.equal(r.status, 403);
+    // 把自己改回自己原名 → 200（不能被自己的名字挡住）
+    r = await req(port, 'PATCH', '/rooms/300900',
+      { path: '/players/p_b/name', value: '华仔' }, { 'X-Device-Id': 'devB' });
+    assert.equal(r.status, 200);
+
+    const room = JSON.parse((await req(port, 'GET', '/rooms/300900')).body);
+    const names = Object.keys(room.players).map((k) => room.players[k].name).sort();
+    assert.deepEqual(names, ['华', '华仔']);   // 房里绝不会出现两个同名
+  } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
+});
+
+test('REST PATCH：超大 /finishedAt 应 403 不落库；tx 的杂字段落库前被剥离', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/301000', sampleRoom(), { 'X-Device-Id': 'boss' });
+
+    // 500KB 的 finishedAt：无条件放行时它会经 snapshot() 进每个牌友的 localStorage
+    let r = await req(port, 'PATCH', '/rooms/301000',
+      { path: '/finishedAt', value: 'x'.repeat(500000) }, { 'X-Device-Id': 'evil' });
+    assert.equal(r.status, 403);
+    r = await req(port, 'PATCH', '/rooms/301000',
+      { path: '/finishedAt', value: { nested: { deep: 'x'.repeat(1000) } } }, { 'X-Device-Id': 'evil' });
+    assert.equal(r.status, 403);
+    // 正常的 ISO 串照旧放行
+    r = await req(port, 'PATCH', '/rooms/301000',
+      { path: '/finishedAt', value: '2026-08-03T12:00:00.000Z' }, { 'X-Device-Id': 'anyone' });
+    assert.equal(r.status, 200);
+
+    // tx：夹带的 note/evil 不该落库；at 非数字用服务端时间
+    r = await req(port, 'PATCH', '/rooms/301000',
+      { path: '/tx/t_9', value: { from: 'p_b', to: 'p_a', points: 3, at: 'NOT-A-NUMBER',
+        note: 'x'.repeat(100000), evil: { deep: 1 } } }, { 'X-Device-Id': 'x' });
+    assert.equal(r.status, 200);
+
+    const room = JSON.parse((await req(port, 'GET', '/rooms/301000')).body);
+    assert.equal(room.finishedAt, '2026-08-03T12:00:00.000Z');
+    assert.deepEqual(Object.keys(room.tx.t_9).sort(), ['at', 'byUid', 'from', 'points', 'to']);
+    assert.equal(typeof room.tx.t_9.at, 'number');   // 'NOT-A-NUMBER' 被换成了服务端时间
+    assert.equal(room.tx.t_9.byUid, 'x');
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 

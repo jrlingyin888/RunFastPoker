@@ -143,6 +143,15 @@ function isValidTx(v, players) {
 // （与 canPatch 里 /tx/、/players/ 路径正则用的是同一套字符集，这里单独抽出来给 canWrite 建房校验复用）。
 const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+// 房内是否已有人叫这个名字（exceptPid 是改名时排除的自己那条）。
+// 服务端必须自己查这一条：客户端的 nameTaken 查的是「进房前读到的那份快照」，
+// 用户停在输名字页的十几秒里别人同名进房，客户端就漏过去了。重名一旦落库，
+// 结算页会出现两行同名（金额各算各的、净额总和不为 0），这条 session 进本地历史后
+// 还会让整份备份文件导不回去（app.js 的 importValid 查玩家名唯一），换手机时全部历史一次丢光。
+function nameTakenIn(players, name, exceptPid) {
+  return Object.keys(players).some((pid) => pid !== exceptPid && players[pid] && players[pid].name === name);
+}
+
 // 建房走 PUT，此后一切增量走 PATCH——房间已存在时禁止整房覆盖，避免有人拿旧快照盖掉别人刚记的分。
 // 建房这一刻此前只查了 creatorUid：players/tx 的内容完全没校验，等于绕开了 canPatch 逐字段做的
 // 那些校验——攻击者可以直接在建房的房间快照里一次性塞进恶意 pid、恶意名字、或凭空捏造的转账。
@@ -164,6 +173,8 @@ function canWrite(old, neu, me) {
       if (!KEY_RE.test(pid)) return false;
       const p = neu.players[pid];
       if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !VALID_NAME.test(p.name)) return false;
+      // 建房那一刻就重名的话，后面每一笔流水都认不出是谁、备份也导不回去 —— 从源头堵住
+      if (nameTakenIn(neu.players, p.name, pid)) return false;
     }
   }
   if (neu.tx !== undefined) {
@@ -192,11 +203,12 @@ function canPatch(old, path, value, me) {
     return isValidTx(value, players);
   }
 
-  // 建玩家：只收没用过的 id；名字要过字符集校验；uid 只能填自己或 null（代记没带手机的人）。
+  // 建玩家：只收没用过的 id；名字要过字符集校验且房内不重名；uid 只能填自己或 null（代记没带手机的人）。
   m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})$/);
   if (m) {
     if (Object.prototype.hasOwnProperty.call(players, m[1])) return false;
     return !!value && typeof value === 'object' && typeof value.name === 'string' && VALID_NAME.test(value.name)
+      && !nameTakenIn(players, value.name)
       && (value.uid === me || value.uid === null || value.uid === undefined);
   }
 
@@ -209,16 +221,24 @@ function canPatch(old, path, value, me) {
     const p = players[m[1]];
     if (m[2] === 'name') {
       if (typeof value !== 'string' || !VALID_NAME.test(value)) return false;
+      if (nameTakenIn(players, value, m[1])) return false;      // 撞了别人的名字（改回自己原名不算撞）
       return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
     }
-    return p.uid === me;                                        // 退出/回归只能自己来
+    // 退出/回归只能自己来。值也要收窄：left/leftAt 会原样落库并广播给每个牌友，
+    // 放任意类型任意大小就等于给了「用一次 PATCH 把房间撑成几百 KB」的口子（同 /finishedAt）。
+    if (p.uid !== me) return false;
+    if (m[2] === 'left') return value === true || value === null;      // 置退出 / 清退出标记
+    return value === null || Number.isFinite(value);                   // leftAt：时间戳或清除
   }
 
   // uid 在建玩家那一刻定死，之后谁都不能改 —— 身份没法被抢。
   if (/^\/players\/[^/]+\/uid$/.test(path)) return false;
 
   if (path === '/status') return value === 'active' || value === 'finished';
-  if (path === '/finishedAt') return true;                      // 结束本场全开放
+  // 结束本场谁都能点，但值必须是「一个 ISO 时间串的样子」。
+  // 无条件放行时，一个 PATCH 就能把 500KB 字符串（或嵌套对象）塞进房间：它会经 snapshot()
+  // 进每个牌友的本地历史，saveDB() 写 localStorage 超 5MB 配额 → 弹「保存失败」，此后历史全存不下。
+  if (path === '/finishedAt') return typeof value === 'string' && value.length <= 64;
   return false;
 }
 
@@ -350,9 +370,14 @@ function createRunfastServer(options = {}) {
         if (!payload || typeof payload !== 'object') { json(res, 400, { error: 'bad json' }); return; }
         if (typeof payload.path === 'string' && payload.value && typeof payload.value === 'object') {
           if (payload.path.startsWith('/tx/')) {
-            // 「这笔是谁记的」由服务端按身份头覆写，客户端传什么都不作数——
-            // 前端要靠这个字段判断「别人代记」并显示提示，能伪造这个字段就等于白记。
-            payload.value.byUid = me;
+            // 一笔流水的字段白名单：只留这五个。isValidTx 只查 from/to/points，夹带的
+            // note/evil 这类字段会原样落库并广播给每个牌友（流水又只增不删，删不掉），
+            // 是继 /finishedAt 之后的第二条「把房间撑大」的路。at 非数字就用服务端时间。
+            // byUid 由服务端按身份头覆写，客户端传什么都不作数——前端靠它判断「别人代记」，
+            // 能伪造就等于白记。
+            const at = Number.isFinite(payload.value.at) ? payload.value.at : Date.now();
+            payload.value = { from: payload.value.from, to: payload.value.to,
+              points: payload.value.points, byUid: me, at };
           } else if (/^\/players\/[^/]+$/.test(payload.path)) {
             // 建玩家的字段白名单：只认 name/uid/at，防止夹带 left:true 之类的字段——
             // 否则一个刚建好的玩家能直接生下来就是「已退出」态，而清 left 要求 uid===me、
