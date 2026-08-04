@@ -134,6 +134,11 @@ function setPath(obj, path, value) {
   return next;
 }
 
+// 名字字符集：与前端 RunfastUI.validName 保持一致（1~8 字，不含引号/尖括号/反斜杠）。
+// 前端已经挡了，但服务端只信自己校验过的东西——名字最终会被别处设备拼进 onclick 属性里
+// （pid 用引号包住的那种），字符集不一致就等于把注入口子留在服务端这一侧。
+const VALID_NAME = /^[^'"<>\\]{1,8}$/;
+
 // 一笔转账是否合法：双方都得是房内玩家、不能自己转自己、分数是正整数。
 function isValidTx(v, players) {
   if (!v || typeof v !== 'object') return false;
@@ -158,11 +163,11 @@ function canPatch(old, path, value, me) {
     return isValidTx(value, players);
   }
 
-  // 建玩家：只收没用过的 id；uid 只能填自己或 null（代记没带手机的人）。
+  // 建玩家：只收没用过的 id；名字要过字符集校验；uid 只能填自己或 null（代记没带手机的人）。
   m = path.match(/^\/players\/([A-Za-z0-9_-]{1,64})$/);
   if (m) {
     if (Object.prototype.hasOwnProperty.call(players, m[1])) return false;
-    return !!value && typeof value === 'object' && typeof value.name === 'string'
+    return !!value && typeof value === 'object' && typeof value.name === 'string' && VALID_NAME.test(value.name)
       && (value.uid === me || value.uid === null || value.uid === undefined);
   }
 
@@ -173,7 +178,10 @@ function canPatch(old, path, value, me) {
   if (m) {
     if (!Object.prototype.hasOwnProperty.call(players, m[1])) return false;
     const p = players[m[1]];
-    if (m[2] === 'name') return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
+    if (m[2] === 'name') {
+      if (typeof value !== 'string' || !VALID_NAME.test(value)) return false;
+      return p.uid === me || p.uid == null;  // 自己的，或没设备的代记玩家
+    }
     return p.uid === me;                                        // 退出/回归只能自己来
   }
 

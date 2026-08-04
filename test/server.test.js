@@ -92,6 +92,22 @@ test('canPatch：改名限自己的和代记的；left 只能自己置自己清�
   assert.ok(!canPatch(r, '/players/p_b/uid', 'x', 'x'));        // 自己也不能改
 });
 
+test('canPatch：名字要过字符集校验（与前端 validName 一致），建玩家和改名两条路径都挡单引号/尖括号', () => {
+  const r = sampleRoom();
+  // 建玩家：带单引号/尖括号的名字被拒；正常名字放行
+  assert.ok(!canPatch(r, '/players/p_new', { name: "a'b", uid: 'x', at: 9 }, 'x'));
+  assert.ok(!canPatch(r, '/players/p_new', { name: '<script>', uid: 'x', at: 9 }, 'x'));
+  assert.ok(!canPatch(r, '/players/p_new', { name: '', uid: 'x', at: 9 }, 'x'));           // 空名字
+  assert.ok(!canPatch(r, '/players/p_new', { name: '123456789', uid: 'x', at: 9 }, 'x'));  // 超 8 字
+  assert.ok(canPatch(r, '/players/p_new', { name: '正常名字', uid: 'x', at: 9 }, 'x'));
+  // 改名：同样的字符集校验，且权限判断不变（自己的/代记的才能改）
+  assert.ok(!canPatch(r, '/players/p_b/name', "坏'名字", 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/name', '<b>坏</b>', 'x'));
+  assert.ok(!canPatch(r, '/players/p_b/name', { name: '对象不是字符串' }, 'x'));
+  assert.ok(canPatch(r, '/players/p_b/name', '正常改名', 'x'));
+  assert.ok(!canPatch(r, '/players/p_a/name', '正常改名', 'x'));  // 名字合法但不是自己的，仍应拒
+});
+
 test('canPatch：结束本场全开放，其他路径一律拒', () => {
   const r = sampleRoom();
   assert.ok(canPatch(r, '/status', 'finished', 'anyone'));
