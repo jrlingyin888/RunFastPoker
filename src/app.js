@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const L = RunfastLogic;
+  const U = RunfastUI;
   const STORE_KEY = 'runfast.v1';
 
   // ---------- 存储 ----------
@@ -22,8 +23,6 @@
 
   // ---------- 工具 ----------
   const $app = document.getElementById('app');
-  const esc = (s) => String(s).replace(/[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const validName = (s) => /^[^'"<>\\]{1,8}$/.test(s);
   const yuan = (fen) => L.fenToYuan(fen);
   const signYuan = (fen) => (fen > 0 ? '+' : '') + L.fenToYuan(fen);
@@ -93,45 +92,12 @@
     }
   }
 
-  const topbar = (title, backJs, actionsHtml) =>
-    `<div class="topbar${actionsHtml ? ' has-actions' : ''}">${backJs ? `<button class="back" onclick="${backJs}">‹ 返回</button>` : ''}<div class="title">${title}</div>${actionsHtml ? `<span class="actions">${actionsHtml}</span>` : ''}</div>`;
 
-  // 底部弹出面板：「更多」菜单与分享面板共用。挂在 body 上而不是 #app 里，
-  // 这样联机端 onRoom 频繁 render() 重绘 #app 时面板不会被抖掉。
-  function closeSheet() { const el = document.getElementById('sheet'); if (el) el.remove(); }
-  function openSheet(items, headerHtml) {
-    closeSheet();
-    const el = document.createElement('div');
-    el.id = 'sheet';
-    el.className = 'sheet-mask';
-    el.innerHTML = `<div class="sheet">
-      ${headerHtml || ''}
-      ${items.map((it) => `<button class="sheet-item${it.danger ? ' danger' : ''}" onclick="${it.onclick}">${esc(it.label)}</button>`).join('')}
-      <button class="sheet-item cancel">取消</button>
-    </div>`;
-    // 按钮的内联 onclick 先在目标上执行，这个委托监听随后关闭面板
-    el.addEventListener('click', (ev) => {
-      if (ev.target === el || ev.target.classList.contains('sheet-item')) closeSheet();
-    });
-    document.body.appendChild(el);
-  }
 
-  async function copyToClipboard(text) {
-    try { await navigator.clipboard.writeText(text); return true; }
-    catch (e) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      return ok;
-    }
-  }
 
   // ---------- 导航与渲染 ----------
   let view = { name: 'home' };
-  function go(v) { closeSheet(); view = v; render(); window.scrollTo(0, 0); }
+  function go(v) { U.closeSheet(); view = v; render(); window.scrollTo(0, 0); }
   const VIEWS = {};
   function render() { $app.innerHTML = VIEWS[view.name](); }
 
@@ -142,7 +108,7 @@
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
-      ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
+      ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${U.esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
       <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
       <div class="gap"></div>
@@ -166,22 +132,22 @@
     const dir = db.playerDirectory;
     const isOnline = view.mode === 'online';
     return `
-      ${topbar(isOnline ? '创建联机场' : '开新一场', 'App.goHome()')}
+      ${U.topbar(isOnline ? '创建联机场' : '开新一场', 'App.goHome()')}
       <div class="card">
         <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
           <span>选择玩家（2～8 人）</span>
           ${dir.length ? `<button class="btn btn-sm" onclick="App.toggleManage()">${view.manage ? '完成' : '管理名录'}</button>` : ''}
         </div>
         ${view.manage
-          ? dir.map((n) => `<div class="row"><span>${esc(n)}</span>
+          ? dir.map((n) => `<div class="row"><span>${U.esc(n)}</span>
               <div style="flex-shrink:0">
-                <button class="btn btn-sm" onclick="App.renameDirName('${esc(n)}')">改名</button>
-                <button class="btn btn-sm" onclick="App.deleteDirName('${esc(n)}')">删除</button>
+                <button class="btn btn-sm" onclick="App.renameDirName('${U.esc(n)}')">改名</button>
+                <button class="btn btn-sm" onclick="App.deleteDirName('${U.esc(n)}')">删除</button>
               </div></div>`).join('') +
             '<div class="muted" style="margin-top:8px">改名/删除只影响这里的常用名单，不影响历史战绩。</div>'
           : `<div class="chips">
               ${dir.map((n) =>
-                `<button class="chip ${sel.includes(n) ? 'on' : ''}" onclick="App.togglePlayer('${esc(n)}')">${esc(n)}</button>`).join('')
+                `<button class="chip ${sel.includes(n) ? 'on' : ''}" onclick="App.togglePlayer('${U.esc(n)}')">${U.esc(n)}</button>`).join('')
               || '<span class="muted">还没有常用玩家，在下面添加第一位吧</span>'}
             </div>`}
         <div style="display:flex;gap:8px;margin-top:12px">
@@ -193,7 +159,7 @@
       </div>
       <div class="card">
         <div class="section-title">每张牌单价（元）</div>
-        <input type="text" id="price" inputmode="decimal" value="${esc(view.price)}" placeholder="如 1 或 0.5">
+        <input type="text" id="price" inputmode="decimal" value="${U.esc(view.price)}" placeholder="如 1 或 0.5">
       </div>
       <button class="btn btn-primary" onclick="App.startSession()">${isOnline ? '创建房间' : '开始记分'}</button>`;
   };
@@ -202,9 +168,9 @@
   // from：这一行是在哪个页面渲染的（'rounds' = 明细页），决定改完之后回哪
   function roundRow(s, r, i, readonly, from) {
     const detail = L.roundTransfers(r, s.pricePerCardFen)
-      .map((t) => `${esc(t.from)} ${t.cards}张`).join('，');
+      .map((t) => `${U.esc(t.from)} ${t.cards}张`).join('，');
     return `<div class="row">
-      <div><b>第${i + 1}局</b> ${esc(r.winner)} 赢${r.at ? ` <span class="muted">${fmtTime(r.at)}</span>` : ''}
+      <div><b>第${i + 1}局</b> ${U.esc(r.winner)} 赢${r.at ? ` <span class="muted">${fmtTime(r.at)}</span>` : ''}
         <div class="muted">${detail || '其他人也都出完了'}</div></div>
       ${readonly ? '' : `<div style="flex-shrink:0">
         <button class="btn btn-sm" onclick="App.editRound('${r.id}','${from || 'session'}')">改</button>
@@ -218,7 +184,7 @@
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     const scoreCard = `<div class="card">
       ${net.map((p) => `<div class="row">
-        <span>${esc(p.name)}${idTag(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
+        <span>${U.esc(p.name)}${idTag(p.name)}${s.activePlayers.includes(p.name) ? '' : ' <span class="muted">（已离场）</span>'}</span>
         <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span>
       </div>`).join('')}</div>`;
     const detailEntry = s.rounds.length
@@ -231,7 +197,7 @@
 
     if (online.active) {
       return `
-        ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
+        ${U.topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
         ${onlineBar()}
         ${scoreCard}
         ${emptySeatClaimCard()}
@@ -241,7 +207,7 @@
     }
     // 本地单机
     return `
-      ${topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()', topActions(false))}
+      ${U.topbar('已记 ' + s.rounds.length + ' 局 · ' + yuan(s.pricePerCardFen) + '元/张', 'App.goHome()', topActions(false))}
       ${scoreCard}
       <button class="btn btn-primary" style="font-size:20px;padding:18px" onclick="App.goRecord()">📝 记一局</button>
       ${detailEntry}
@@ -257,7 +223,7 @@
       <div class="section-title">空座待认领</div>
       <div class="muted" style="margin-bottom:8px">这些位置暂时没人记分。回来的人点自己名字接着记；也可由别人接手，继续记 TA 的分。</div>
       <div class="chips">${empties.map((i) =>
-        `<button class="chip" onclick="App.claimSeat(${i})">坐「${esc(seats[i].name)}」的位置</button>`).join('')}</div>
+        `<button class="chip" onclick="App.claimSeat(${i})">坐「${U.esc(seats[i].name)}」的位置</button>`).join('')}</div>
     </div>`;
   }
 
@@ -280,7 +246,7 @@
       return `<div class="card">
         <div class="section-title">这一局 · 谁赢了？（赢的人点自己）</div>
         <div class="chips">${idxs.map((i) =>
-          `<button class="chip" onclick="App.draftPickWinner(${i})">${esc(seats[i].name)}${idTag(seats[i].name)}</button>`).join('')}</div>
+          `<button class="chip" onclick="App.draftPickWinner(${i})">${U.esc(seats[i].name)}${idTag(seats[i].name)}</button>`).join('')}</div>
         <div class="muted" style="margin-top:8px">${isSeated() || owner ? '赢家先点，其余各自填「剩几张」并确认，全部确认后自动记这一局。' : '观战中，看大家记分即可'}</div>
       </div>`;
     }
@@ -303,7 +269,7 @@
         const openBtn = canFill(i)
           ? `<button class="btn btn-sm" style="margin-left:10px" onclick="App.draftOpenSeat(${i})">${filled ? '改' : '代填'}</button>`
           : '';
-        return `<div class="row"><span>${esc(seats[i].name)}</span>
+        return `<div class="row"><span>${U.esc(seats[i].name)}</span>
           <span><span class="${done ? 'pos' : 'muted'}">${status}</span>${openBtn}</span></div>`;
       }
 
@@ -314,7 +280,7 @@
         : '';
       const collapseBtn = isMine ? '' : `<button class="btn btn-sm" style="margin-left:8px" onclick="App.draftCloseSeat(${i})">收起</button>`;
       return `<div class="card"${done ? ' style="opacity:.7"' : ''}>
-        <div class="section-title">${esc(seats[i].name)}${seats[i].name === myOwnName() ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}${collapseBtn}</div>
+        <div class="section-title">${U.esc(seats[i].name)}${seats[i].name === myOwnName() ? '（我）' : '（代填）'} 剩几张？ ${shutBadge}${collapseBtn}</div>
         <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
           `<button class="${v === k ? 'on' : ''}" onclick="App.draftFill(${i},${k})">${k}</button>`).join('')}</div>
         <button class="btn ${done ? '' : 'btn-primary'}" style="margin-top:10px" ${filled ? '' : 'disabled style="opacity:.4"'} onclick="App.draftConfirm(${i})">
@@ -323,7 +289,7 @@
     }).join('');
 
     return `<div class="card">
-      <div class="section-title">这一局 · ${esc(seats[draft.winner].name)} 赢${(isSeated() || owner) ? ' <button class="btn btn-sm" onclick="App.draftPickWinner(null)">改赢家</button>' : ''}</div>
+      <div class="section-title">这一局 · ${U.esc(seats[draft.winner].name)} 赢${(isSeated() || owner) ? ' <button class="btn btn-sm" onclick="App.draftPickWinner(null)">改赢家</button>' : ''}</div>
       <div class="muted">赢家 0 张；其余各自填「剩几张」并点确认。已确认 ${doneCount}/${losers.length} 人，全部确认后自动记这一局。</div>
     </div>
     ${rows}`;
@@ -350,28 +316,28 @@
     if (ready) {
       const ts = L.roundTransfers({ winner: w, losers: currentLosers() }, s.pricePerCardFen);
       previewHtml = `<div class="card"><div class="section-title">本局结算预览</div>
-        ${ts.map((t) => `<div class="row"><span>${esc(t.from)} → ${esc(t.to)}</span><span>${t.cards} 张 · ${yuan(t.fen)} 元</span></div>`).join('')
+        ${ts.map((t) => `<div class="row"><span>${U.esc(t.from)} → ${U.esc(t.to)}</span><span>${t.cards} 张 · ${yuan(t.fen)} 元</span></div>`).join('')
           || '<div class="muted">其他人都 0 张，本局无转账</div>'}</div>`;
     }
     return `
-      ${topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.cancelRecord()')}
+      ${U.topbar(view.editId ? `修改第 ${view.editIndex} 局` : `记第 ${s.rounds.length + 1} 局`, 'App.cancelRecord()')}
       <div class="card">
         <div class="section-title">1️⃣ 谁赢了？</div>
         <div class="chips">${ps.map((n) =>
-          `<button class="chip ${w === n ? 'on' : ''}" onclick="App.pickWinner('${esc(n)}')">${esc(n)}</button>`).join('')}</div>
+          `<button class="chip ${w === n ? 'on' : ''}" onclick="App.pickWinner('${U.esc(n)}')">${U.esc(n)}</button>`).join('')}</div>
       </div>
       ${w ? losers.map((n) => {
         const v = view.cards[n];
         const shutBadge =
           v === 10 && !view.shutoutOff[n]
-            ? `<button class="badge" onclick="App.toggleShutout('${esc(n)}')">全关 ×2（点此取消）</button>`
+            ? `<button class="badge" onclick="App.toggleShutout('${U.esc(n)}')">全关 ×2（点此取消）</button>`
             : v === 10
-              ? `<button class="badge" style="background:#e5e7eb;color:#374151" onclick="App.toggleShutout('${esc(n)}')">全关已取消（点此恢复）</button>`
+              ? `<button class="badge" style="background:#e5e7eb;color:#374151" onclick="App.toggleShutout('${U.esc(n)}')">全关已取消（点此恢复）</button>`
               : '';
         return `<div class="card">
-          <div class="section-title">${esc(n)} 剩几张？ ${shutBadge}</div>
+          <div class="section-title">${U.esc(n)} 剩几张？ ${shutBadge}</div>
           <div class="numgrid">${[0,1,2,3,4,5,6,7,8,9,10].map((k) =>
-            `<button class="${v === k ? 'on' : ''}" onclick="App.pickCards('${esc(n)}',${k})">${k}</button>`).join('')}</div>
+            `<button class="${v === k ? 'on' : ''}" onclick="App.pickCards('${U.esc(n)}',${k})">${k}</button>`).join('')}</div>
         </div>`;
       }).join('') : ''}
       ${previewHtml}
@@ -386,15 +352,15 @@
     const net = L.sessionNet(s).slice().sort((a, b) => b.fen - a.fen);
     const pays = L.settleUp(L.sessionNet(s));
     return `
-      ${topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
+      ${U.topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
       <div class="card">
         <div class="section-title">最终盈亏（${s.rounds.length} 局 · ${yuan(s.pricePerCardFen)}元/张）</div>
-        ${net.map((p) => `<div class="row"><span>${esc(p.name)}</span>
+        ${net.map((p) => `<div class="row"><span>${U.esc(p.name)}</span>
           <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span></div>`).join('')}
       </div>
       <div class="card">
         <div class="section-title">💸 转账方案（最少笔数）</div>
-        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 转给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
+        ${pays.map((t) => `<div class="row"><span>${U.esc(t.from)} 转给 ${U.esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
           || '<div class="muted">全部打平，无需转账</div>'}
       </div>
       <button class="btn btn-primary" onclick="App.shareImage('${s.id}')">📤 分享战绩图</button>
@@ -416,7 +382,7 @@
     const editable = fromSession && (!online.active || RunfastSync.canEdit(online.room, online.uid));
     const back = fromSession ? 'App.goSession()' : `App.goSettle('${view.sid}','${view.from}')`;
     return `
-      ${topbar('每局明细', back)}
+      ${U.topbar('每局明细', back)}
       <div class="card">${s.rounds.map((r, i) => roundRow(s, r, i, !editable, 'rounds')).join('')
         || '<div class="muted">本场没有记录任何一局</div>'}</div>`;
   };
@@ -435,7 +401,7 @@
     const list = db.sessions.filter((s) => s.status === 'finished')
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     if (!list.length) {
-      return `${topbar('历史记录', 'App.goHome()')}
+      return `${U.topbar('历史记录', 'App.goHome()')}
         <div class="card"><div class="muted">还没有打完的场</div></div>`;
     }
     const edit = !!view.editMode;
@@ -449,7 +415,7 @@
         <button class="btn btn-sm btn-danger" ${sel.length ? '' : 'disabled style="opacity:.4"'} onclick="App.historyDeleteSel()">删除所选（${sel.length}）</button>
       </div>` : '';
     return `
-      ${topbar('历史记录', 'App.goHome()', actions)}
+      ${U.topbar('历史记录', 'App.goHome()', actions)}
       ${bar}
       <div class="card">
         ${list.map((s) => {
@@ -470,10 +436,10 @@
 
   // ---------- 联机 ----------
   VIEWS.joinRoom = () => `
-    ${topbar('加入联机场', 'App.goHome()')}
+    ${U.topbar('加入联机场', 'App.goHome()')}
     <div class="card">
       <div class="section-title">输入 6 位房号</div>
-      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? esc(view.code) : ''}">
+      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? U.esc(view.code) : ''}">
       <div class="gap"></div>
       <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
       <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
@@ -485,14 +451,14 @@
     const mine = new Set(mySeatIdx());
     const owner = isOwner();
     return `
-      ${topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
+      ${U.topbar('等待入座 · ' + yuan(s.pricePerCardFen) + '元/张', '', topActions(true))}
       ${onlineBar()}
       <div class="card">
         <div class="section-title">选个座位（点灰色名字入座；没带手机的人可由你替 TA 入座）</div>
         <div class="chips">
           ${seats.map((seat, i) => seat.claimedBy
-            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${esc(seat.name)}${mine.has(i) ? (seat.name === myOwnName() ? '（我，点退座）' : '（代，点退座）') : ' ✓'}</button>`
-            : `<button class="chip" onclick="App.claimSeat(${i})">${esc(seat.name)}</button>`).join('')}
+            ? `<button class="chip on" ${mine.has(i) ? `onclick="App.releaseSeat(${i})"` : 'disabled'}>${U.esc(seat.name)}${mine.has(i) ? (seat.name === myOwnName() ? '（我，点退座）' : '（代，点退座）') : ' ✓'}</button>`
+            : `<button class="chip" onclick="App.claimSeat(${i})">${U.esc(seat.name)}</button>`).join('')}
         </div>
         <div class="muted" style="margin-top:10px">灰色=空位，高亮=已入座。所有座位坐满后房主才能开始。</div>
       </div>
@@ -508,7 +474,7 @@
     const watching = RunfastSync.observerCount(online.presence, seatsOf());
     const dot = online.status === 'connected' ? '' : 'off';
     return `<div class="sync-bar">
-      <span><span class="sync-dot ${dot}"></span>房号 ${esc(online.code)} · ${playing} 人在玩 · ${watching} 人观战</span>
+      <span><span class="sync-dot ${dot}"></span>房号 ${U.esc(online.code)} · ${playing} 人在玩 · ${watching} 人观战</span>
     </div>`;
   }
 
@@ -612,20 +578,20 @@
     const inLobby = online.active && online.room && online.room.phase === 'lobby';
     const back = inLobby ? 'App.backFromPlayers()' : 'App.goSession()';
     return `
-      ${topbar('玩家管理', back)}
+      ${U.topbar('玩家管理', back)}
       <div class="card">
-        ${s.players.map((n) => `<div class="row"><span>${esc(n)}${!preGame && !s.activePlayers.includes(n) ? ' <span class="muted">（已离场）</span>' : ''}</span>
+        ${s.players.map((n) => `<div class="row"><span>${U.esc(n)}${!preGame && !s.activePlayers.includes(n) ? ' <span class="muted">（已离场）</span>' : ''}</span>
           <span style="flex-shrink:0;display:inline-flex;gap:6px">
-            <button class="btn btn-sm" onclick="App.renamePlayer('${esc(n)}')">改名</button>
+            <button class="btn btn-sm" onclick="App.renamePlayer('${U.esc(n)}')">改名</button>
             ${preGame
-              ? `<button class="btn btn-sm btn-danger" onclick="App.removePlayer('${esc(n)}')">删除</button>`
+              ? `<button class="btn btn-sm btn-danger" onclick="App.removePlayer('${U.esc(n)}')">删除</button>`
               : (s.activePlayers.includes(n)
-                  ? `<button class="btn btn-sm" onclick="App.leave('${esc(n)}')">标记离场</button>`
-                  : `<button class="btn btn-sm" onclick="App.comeBack('${esc(n)}')">回归</button>`)}
+                  ? `<button class="btn btn-sm" onclick="App.leave('${U.esc(n)}')">标记离场</button>`
+                  : `<button class="btn btn-sm" onclick="App.comeBack('${U.esc(n)}')">回归</button>`)}
           </span>
         </div>`).join('')}
         <div style="display:flex;gap:8px;margin-top:12px">
-          <input type="text" id="joinName" placeholder="加个玩家名字（8 字以内）" maxlength="8" value="${esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
+          <input type="text" id="joinName" placeholder="加个玩家名字（8 字以内）" maxlength="8" value="${U.esc(view.joinName || '')}" oninput="App.rememberJoinName(this.value)">
           <button class="btn btn-sm" onclick="App.joinPlayer()">加入</button>
         </div>
         <div class="muted" style="margin-top:10px">${preGame ? '还没开打：可改名、删除玩家或加人。' : '离场玩家不再出现在新局录入中；历史成绩保留，仍参与最终结算。'}</div>
@@ -838,7 +804,7 @@
       } else {                                    // 联机牌友/观战
         items.push({ label: '退出房间', onclick: 'App.leaveRoom()' });
       }
-      openSheet(items);
+      U.openSheet(items);
     },
 
     async toggleAllowEdit() {
@@ -868,7 +834,7 @@
         <img src="${inviteUrl}" alt="扫码进房" style="width:100%;max-width:270px;border-radius:14px;display:block;margin:0 auto;box-shadow:0 6px 18px rgba(0,0,0,.35)">
         <div class="muted" style="margin-top:10px">长按上图保存整张 · 或用下面按钮发出去</div>
       </div>`;
-      openSheet([
+      U.openSheet([
         { label: '📤 分享二维码图片', onclick: 'App.shareInviteImage()' },
         { label: '🔗 分享链接文字', onclick: 'App.shareInviteLink()' },
         { label: '复制链接', onclick: 'App.copyInvite()' },
@@ -901,17 +867,17 @@
       const link = inviteLink();
       const header = `<div style="text-align:center;padding:10px 0 4px">
         <div class="muted">房号</div>
-        <div style="font-size:34px;font-weight:800;letter-spacing:4px">${esc(online.code)}</div>
+        <div style="font-size:34px;font-weight:800;letter-spacing:4px">${U.esc(online.code)}</div>
         <img src="qr?text=${encodeURIComponent(link)}" alt="扫码进房" onerror="this.remove()"
              style="width:180px;height:180px;margin:10px auto 6px;display:block">
         <div class="muted">让牌友扫码，或复制链接发群里</div>
-        <div class="muted" style="word-break:break-all;margin-top:4px">${esc(link)}</div>
+        <div class="muted" style="word-break:break-all;margin-top:4px">${U.esc(link)}</div>
       </div>`;
-      openSheet([{ label: '复制链接', onclick: 'App.copyInvite()' }], header);
+      U.openSheet([{ label: '复制链接', onclick: 'App.copyInvite()' }], header);
     },
 
     async copyInvite() {
-      const ok = await copyToClipboard('来跑得快记分房间围观/记分：' + inviteLink() + '（房号 ' + online.code + '）');
+      const ok = await U.copyToClipboard('来跑得快记分房间围观/记分：' + inviteLink() + '（房号 ' + online.code + '）');
       alert(ok ? '邀请链接已复制，发到群里吧' : '复制失败，请手动把房号告诉牌友：' + online.code);
     },
 
@@ -1219,7 +1185,7 @@
 
     async copyText(sid) {
       const s = db.sessions.find((x) => x.id === sid);
-      const ok = await copyToClipboard(L.summaryText(s));
+      const ok = await U.copyToClipboard(L.summaryText(s));
       alert(ok ? '已复制，去粘贴发给牌友吧' : '复制失败，请改用「分享战绩图」或截图');
     },
 
