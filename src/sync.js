@@ -14,8 +14,6 @@ var RunfastSync = (function () {
     return s;
   }
   const validRoomCode = (s) => typeof s === 'string' && /^[0-9]{6}$/.test(s);
-  const canEdit = (room, uid) => !!room && !!uid && (room.creatorUid === uid || room.allowEdit === true);
-  const canAdmin = (room, uid) => !!room && !!uid && room.creatorUid === uid;
 
   // SSE put 事件 → 本地房间镜像
   function applyEvent(room, path, data) {
@@ -30,39 +28,42 @@ var RunfastSync = (function () {
     return next;
   }
 
-  // 兜底：把可能缺失的数组字段补回（本服务器用 JSON 落地不会丢空数组，但保持幂等无害）
+  // 兜底：把可能缺失的 map 字段补回（幂等，无害）
   function normalizeRoom(room) {
-    if (room && room.session) {
-      const s = room.session;
-      s.players ||= [];
-      s.activePlayers ||= [];
-      s.rounds ||= [];
-      s.rounds.forEach((r) => { r.losers ||= []; });
-    }
+    if (room) { room.players ||= {}; room.tx ||= {}; }
     return room;
   }
 
-  // ---------- 协作草稿 / 人数（纯函数）----------
-  // draft={winner:<座位下标>|null, entries:{<下标>:{cardsLeft,shutout}}}；activeIdx=本局参与的座位下标数组
-  function isDraftSaveable(draft, activeIdx) {
-    if (!draft || draft.winner == null) return false;
-    return activeIdx.filter((i) => i !== draft.winner)
-      .every((i) => draft.entries && draft.entries[i] && typeof draft.entries[i].cardsLeft === 'number');
+  // ---------- 房间纯函数 ----------
+  // 唯一 key：并发写落在不同 key 上，服务器逐个落盘就不会互相覆盖。
+  function newKey(prefix) {
+    return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
-  function draftToRound(draft, seats, activeIdx) {
-    const losers = activeIdx.filter((i) => i !== draft.winner).map((i) => ({
-      name: seats[i].name,
-      cardsLeft: draft.entries[i].cardsLeft,
-      shutout: !!draft.entries[i].shutout,
-    }));
-    return { winner: seats[draft.winner].name, losers };
+
+  // 按设备 id 找回自己那条玩家记录 —— 回归房间认的是设备，不是名字。
+  function findMyPid(room, uid) {
+    if (!room || !room.players || !uid) return null;
+    return Object.keys(room.players).find((pid) => room.players[pid].uid === uid) || null;
   }
-  function observerCount(deviceIds, seats) {
-    const seated = new Set((seats || []).map((s) => s.claimedBy).filter(Boolean));
-    return (deviceIds || []).filter((d) => !seated.has(d)).length;
+
+  // 在玩的人数（已退出的不算）
+  function playingCount(room) {
+    const ps = (room && room.players) || {};
+    return Object.keys(ps).filter((pid) => !ps[pid].left).length;
   }
-  function playingCount(seats) {
-    return (seats || []).filter((s) => s.claimedBy).length;
+
+  // 名字是否被别人占了。流水按名字展示，重名就认不出谁是谁，所以进房和改名都要挡。
+  function nameTaken(room, name, exceptPid) {
+    const ps = (room && room.players) || {};
+    return Object.keys(ps).some((pid) => pid !== exceptPid && ps[pid].name === name);
+  }
+
+  // 流水 map → 按时间升序的数组
+  function txList(room) {
+    const tx = (room && room.tx) || {};
+    return Object.keys(tx)
+      .map((id) => Object.assign({ id }, tx[id]))
+      .sort((a, b) => (a.at || 0) - (b.at || 0));
   }
 
   // ---------- 设备身份（取代 Firebase 匿名认证）----------
@@ -112,32 +113,24 @@ var RunfastSync = (function () {
     if (!res.ok) throw new Error('操作失败 ' + res.status);
   }
 
-  // 读-改-写（局域网服务器按请求串行处理，无需 ETag 乐观锁）
-  async function mutate(code, opFn) {
-    const { data } = await readRoom(code);
-    if (data === null) throw new Error('房间不存在或已关闭');
-    const next = opFn(JSON.parse(JSON.stringify(data)));
-    await writeRoom(code, next);
-    return next;
-  }
-
-  async function createRoom(session) {
+  // 建房：房号试 5 次，建房人自己就是第一个玩家。
+  async function createRoom(init) {
     await signIn();
     for (let i = 0; i < 5; i++) {
       const code = genRoomCode();
       const { data } = await readRoom(code);
       if (data !== null) continue; // 房号被占用，换一个
-      const room = {
+      const pid = newKey('p_');
+      await writeRoom(code, {
         creatorUid: deviceId,
-        allowEdit: false, // 是否允许非房主修改「已保存的一局」（记分阶段用协作草稿，与此无关）
-        phase: 'lobby',
-        seats: session.players.map((n) => ({ name: n, claimedBy: null })),
-        draft: null,
-        updatedAt: Date.now(),
-        session,
-      };
-      await writeRoom(code, room);
-      return code;
+        sid: 's' + Date.now(),
+        createdAt: new Date().toISOString(),
+        pricePerCardFen: init.pricePerCardFen,
+        status: 'active',
+        players: { [pid]: { name: init.name, uid: deviceId, at: Date.now() } },
+        tx: {},
+      });
+      return { code, pid };
     }
     throw new Error('建房失败，请重试');
   }
@@ -162,9 +155,8 @@ var RunfastSync = (function () {
     if (es) { es.close(); es = null; }
     if (!currentCode) return;
     if (cb && cb.onStatus) cb.onStatus('connecting');
-    es = new EventSource(roomUrl(currentCode) + '/events?dev=' + encodeURIComponent(deviceId || ''));
+    es = new EventSource(roomUrl(currentCode) + '/events');
     es.addEventListener('put', onEvt);
-    es.addEventListener('presence', onPresence);
     es.onopen = () => { if (g === gen && cb && cb.onStatus) cb.onStatus('connected'); };
     es.onerror = () => {
       if (g !== gen) return;
@@ -187,11 +179,6 @@ var RunfastSync = (function () {
     if (cb.onRoom) cb.onRoom(room);
   }
 
-  function onPresence(e) {
-    if (!cb || !cb.onPresence) return;
-    try { cb.onPresence(JSON.parse(e.data).devices || []); } catch (err) { /* 忽略坏帧 */ }
-  }
-
   function close() {
     gen++;
     clearTimeout(retryTimer);
@@ -199,9 +186,9 @@ var RunfastSync = (function () {
     es = null; room = null; currentCode = null; cb = null;
   }
 
-  const api = { configured, genRoomCode, validRoomCode, canEdit, canAdmin,
-    isDraftSaveable, draftToRound, observerCount, playingCount,
-    applyEvent, normalizeRoom, signIn, getUid, createRoom, readRoom, subscribe, patch, mutate, deleteRoom, close };
+  const api = { configured, genRoomCode, validRoomCode,
+    newKey, findMyPid, playingCount, nameTaken, txList,
+    applyEvent, normalizeRoom, signIn, getUid, createRoom, readRoom, subscribe, patch, writeRoom, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
