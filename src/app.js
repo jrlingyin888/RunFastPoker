@@ -50,6 +50,7 @@
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
+      ${view.notice ? `<div class="notice"><span>${esc(view.notice)}</span><button class="notice-x" onclick="App.dismissNotice()">×</button></div>` : ''}
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
       <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
@@ -204,11 +205,13 @@
   VIEWS.joinRoom = () => `
     ${topbar('加入联机场', 'App.goHome()')}
     <div class="card">
-      <div class="section-title">输入 6 位房号</div>
-      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? esc(view.code) : ''}">
+      <div class="section-title">粘贴邀请链接，或输入 6 位房号</div>
+      <input type="text" id="roomCode" placeholder="如 314159，或直接粘贴房主发的整段邀请" value="${view.code ? esc(view.code) : ''}">
       <div class="gap"></div>
       <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
-      <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
+      <div class="muted" style="margin-top:10px">${view.code
+        ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。'
+        : '房主发到群里的那段话整条粘进来就行，会自动认出房号；也可以直接扫房主分享的二维码进房。'}</div>
     </div>`;
 
   // ---------- 导入前校验 ----------
@@ -295,6 +298,7 @@
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
+    dismissNotice() { view.notice = null; render(); },
     goSetup: () => go({ name: 'setup', sel: [], myName: '', price: '1', manage: false }),
     goHistory: () => go({ name: 'history', editMode: false, sel: [] }),
     historyEditOn() { view.editMode = true; view.sel = []; render(); },
@@ -331,8 +335,9 @@
     },
 
     joinRoomSubmit() {
-      const code = document.getElementById('roomCode').value.trim();
-      if (!RunfastSync.validRoomCode(code)) { alert('房号是 6 位数字'); return; }
+      const raw = document.getElementById('roomCode').value;
+      const code = RunfastSync.parseRoomCode(raw);
+      if (!code) { alert('没认出房号。把房主发的那段邀请整条粘进来，或者直接输 6 位数字。'); return; }
       R.preview(code);
     },
 
@@ -506,8 +511,14 @@
   let savedRoom = null;
   try { savedRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
   if (RunfastSync.configured()) {
-    if (roomParam) R.preview(roomParam[1]);
-    else if (savedRoom && RunfastSync.validRoomCode(savedRoom.code)) R.preview(savedRoom.code, { silent: true });
+    if (roomParam) {
+      // 用掉就把 ?room= 从地址栏抹掉：留着的话每次刷新都重跑一遍进房，
+      // 房间要是已经关了就变成「刷一次弹一次」。分享链接是分享按钮另外拼的，不受影响。
+      try { history.replaceState(null, '', location.pathname); } catch (e) { /* 忽略 */ }
+      R.preview(roomParam[1]);
+    } else if (savedRoom && RunfastSync.validRoomCode(savedRoom.code)) {
+      R.preview(savedRoom.code, { silent: true });
+    }
   }
 
   render();

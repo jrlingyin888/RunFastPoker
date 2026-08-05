@@ -143,3 +143,35 @@ test('旧的房主/草稿纯函数已移除', () => {
   ['canEdit', 'canAdmin', 'isDraftSaveable', 'draftToRound', 'observerCount', 'mutate']
     .forEach((k) => assert.equal(S[k], undefined, k + ' 应该已删除'));
 });
+
+test('parseRoomCode：邀请链接、群里那段话、纯房号都能认出来', () => {
+  // 我们自己的邀请链接与邀请文字
+  assert.equal(S.parseRoomCode('https://ipa.ydyrx.top/?room=314159'), '314159');
+  assert.equal(S.parseRoomCode('http://192.168.1.9:8787/?room=012345'), '012345');
+  assert.equal(S.parseRoomCode('来跑得快记分房间围观/记分：https://ipa.ydyrx.top/?room=314159（房号 314159）'), '314159');
+  // 只有「房号 xxxxxx」没有链接
+  assert.equal(S.parseRoomCode('房号 271828'), '271828');
+  assert.equal(S.parseRoomCode('房号：271828'), '271828');
+  // 干脆就是 6 位数字，前后带空格也行
+  assert.equal(S.parseRoomCode('161803'), '161803');
+  assert.equal(S.parseRoomCode('  161803  '), '161803');
+  // 全角数字（中文输入法容易带出来）
+  assert.equal(S.parseRoomCode('１６１８０３'), '161803');
+});
+
+test('parseRoomCode：认不出来时返回 null，不瞎猜', () => {
+  assert.equal(S.parseRoomCode('12345'), null);        // 5 位
+  assert.equal(S.parseRoomCode('1234567'), null);      // 7 位，不能截前 6 位
+  assert.equal(S.parseRoomCode('20260805'), null);     // 8 位日期，不能当房号
+  assert.equal(S.parseRoomCode('没有数字'), null);
+  assert.equal(S.parseRoomCode(''), null);
+  assert.equal(S.parseRoomCode(null), null);
+  assert.equal(S.parseRoomCode(123456), null);         // 不是字符串
+});
+
+test('parseRoomCode：room= 参数优先于文本里别的 6 位数', () => {
+  // 邀请文字里既有日期又有房号，room= 说了算
+  assert.equal(S.parseRoomCode('8月5日 20:30 开局 https://x/?room=987654'), '987654');
+  // 没有 room= 时「房号」标签优先于前面那串孤立数字
+  assert.equal(S.parseRoomCode('密码 111222，房号 333444'), '333444');
+});

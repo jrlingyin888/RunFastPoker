@@ -33,12 +33,11 @@ var RunfastRoom = (function () {
       state.uid = S.getUid();
       const { data } = await S.readRoom(code);
       if (data === null) {
-        let saved = null;
-        try { saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null'); } catch (e) { /* 忽略 */ }
-        if (saved && saved.code === code) localStorage.removeItem(ROOM_KEY);
-        if (silent) { host.go({ name: 'home' }); return; }
-        alert('房间 ' + code + ' 暂时进不去，可能房主还没建好或已关闭。已帮你填好房号，稍后点「进入房间」重试即可。');
-        host.go({ name: 'joinRoom', code });
+        // 房间不在了（房主关了房、或服务端数据被清）。别弹阻塞的 alert，也别把人丢到
+        // 「加入房间」页去重试一个已经不存在的房号——那只会让他反复点、反复失败。
+        // 回首页 + 一条能关掉的提示，想干别的随时干。
+        forgetSavedRoom(code);
+        host.go({ name: 'home', notice: '房间 ' + code + ' 进不去了，可能房主已经关闭它。' });
         return;
       }
       const pid = S.findMyPid(data, state.uid);
@@ -47,9 +46,17 @@ var RunfastRoom = (function () {
       // 字段叫 myName 不叫 name —— 路由对象上的 name 是视图名（'joinName'），撞了会把视图名渲染进输入框
       host.go({ name: 'joinName', code, pid, myName: pid ? data.players[pid].name : lastName() });
     } catch (e) {
+      // 网络抽风：房间多半还在，别清本机记的房号，回首页提示一下让他重试
       if (silent) { host.go({ name: 'home' }); return; }
-      alert('进入房间失败：' + e.message);
+      host.go({ name: 'home', notice: '连不上房间 ' + code + '，检查下网络再试。' });
     }
+  }
+  // 本机记着的就是这个房号才清掉，免得误删另一个还有效的
+  function forgetSavedRoom(code) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null');
+      if (saved && saved.code === code) localStorage.removeItem(ROOM_KEY);
+    } catch (e) { /* 忽略 */ }
   }
 
   // ---------- 输名字 / 确认回归 ----------

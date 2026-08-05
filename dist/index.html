@@ -111,6 +111,12 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
   background: #9ca3af; color: #fff; font-size: 11px; font-weight: 700; }
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+/* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
+.notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
+  border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
+  border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
+.notice-x { margin-left: auto; flex-shrink: 0; border: 0; background: none;
+  color: var(--gold-soft); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; }
 /* 流水里的时间分隔：居中小灰药丸，把同一局的几笔视觉上归成一组 */
 .tx-time { text-align: center; margin: 12px 0 4px; }
 .tx-time:first-child { margin-top: 2px; }
@@ -290,6 +296,21 @@ var RunfastSync = (function () {
     return s;
   }
   const validRoomCode = (s) => typeof s === 'string' && /^[0-9]{6}$/.test(s);
+
+  // 从粘贴进来的任意文本里抠出 6 位房号：整条邀请链接、群里那段邀请话、或者干脆就是 6 位数字。
+  // 优先认 room= 参数（我们自己链接的格式，最可靠），再认「房号 xxxxxx」，最后才找孤立的 6 位数。
+  // 不用 (?<!\d) 这种后行断言——iOS 16.4 之前的 Safari 不支持，整个脚本会直接语法错误。
+  function parseRoomCode(text) {
+    if (typeof text !== 'string') return null;
+    // 全角数字先转半角：中文输入法和某些复制粘贴会带全角
+    const s = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+    const byParam = s.match(/room=(\d{6})(?!\d)/i);
+    if (byParam) return byParam[1];
+    const byLabel = s.match(/房号[^\d]{0,4}(\d{6})(?!\d)/);
+    if (byLabel) return byLabel[1];
+    const bare = s.match(/(?:^|\D)(\d{6})(?!\d)/);
+    return bare ? bare[1] : null;
+  }
 
   // SSE put 事件 → 本地房间镜像
   function applyEvent(room, path, data) {
@@ -478,7 +499,7 @@ var RunfastSync = (function () {
     es = null; room = null; currentCode = null; cb = null;
   }
 
-  const api = { configured, genRoomCode, validRoomCode,
+  const api = { configured, genRoomCode, validRoomCode, parseRoomCode,
     newKey, findMyPid, playingCount, nameTaken, txList,
     applyEvent, normalizeRoom, signIn, getUid, createRoom, readRoom, subscribe, patch, writeRoom, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
@@ -815,12 +836,11 @@ var RunfastRoom = (function () {
       state.uid = S.getUid();
       const { data } = await S.readRoom(code);
       if (data === null) {
-        let saved = null;
-        try { saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null'); } catch (e) { /* 忽略 */ }
-        if (saved && saved.code === code) localStorage.removeItem(ROOM_KEY);
-        if (silent) { host.go({ name: 'home' }); return; }
-        alert('房间 ' + code + ' 暂时进不去，可能房主还没建好或已关闭。已帮你填好房号，稍后点「进入房间」重试即可。');
-        host.go({ name: 'joinRoom', code });
+        // 房间不在了（房主关了房、或服务端数据被清）。别弹阻塞的 alert，也别把人丢到
+        // 「加入房间」页去重试一个已经不存在的房号——那只会让他反复点、反复失败。
+        // 回首页 + 一条能关掉的提示，想干别的随时干。
+        forgetSavedRoom(code);
+        host.go({ name: 'home', notice: '房间 ' + code + ' 进不去了，可能房主已经关闭它。' });
         return;
       }
       const pid = S.findMyPid(data, state.uid);
@@ -829,9 +849,17 @@ var RunfastRoom = (function () {
       // 字段叫 myName 不叫 name —— 路由对象上的 name 是视图名（'joinName'），撞了会把视图名渲染进输入框
       host.go({ name: 'joinName', code, pid, myName: pid ? data.players[pid].name : lastName() });
     } catch (e) {
+      // 网络抽风：房间多半还在，别清本机记的房号，回首页提示一下让他重试
       if (silent) { host.go({ name: 'home' }); return; }
-      alert('进入房间失败：' + e.message);
+      host.go({ name: 'home', notice: '连不上房间 ' + code + '，检查下网络再试。' });
     }
+  }
+  // 本机记着的就是这个房号才清掉，免得误删另一个还有效的
+  function forgetSavedRoom(code) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null');
+      if (saved && saved.code === code) localStorage.removeItem(ROOM_KEY);
+    } catch (e) { /* 忽略 */ }
   }
 
   // ---------- 输名字 / 确认回归 ----------
@@ -1534,6 +1562,7 @@ var RunfastRoom = (function () {
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
       <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
+      ${view.notice ? `<div class="notice"><span>${esc(view.notice)}</span><button class="notice-x" onclick="App.dismissNotice()">×</button></div>` : ''}
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
       <button class="btn btn-primary btn-hero" onclick="App.goOnlineSetup()">创建联机场<small>开个房间，牌友扫码进来一起记</small></button>
@@ -1688,11 +1717,13 @@ var RunfastRoom = (function () {
   VIEWS.joinRoom = () => `
     ${topbar('加入联机场', 'App.goHome()')}
     <div class="card">
-      <div class="section-title">输入 6 位房号</div>
-      <input type="text" id="roomCode" inputmode="numeric" maxlength="6" placeholder="如 314159" value="${view.code ? esc(view.code) : ''}">
+      <div class="section-title">粘贴邀请链接，或输入 6 位房号</div>
+      <input type="text" id="roomCode" placeholder="如 314159，或直接粘贴房主发的整段邀请" value="${view.code ? esc(view.code) : ''}">
       <div class="gap"></div>
       <button class="btn btn-primary" onclick="App.joinRoomSubmit()">进入房间</button>
-      <div class="muted" style="margin-top:10px">${view.code ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。' : '房号问房主要，或直接点房主发到群里的链接。'}</div>
+      <div class="muted" style="margin-top:10px">${view.code
+        ? '房号已自动填好，点「进入房间」即可（若进不去，可能房主还没建好或已关闭，稍等再试）。'
+        : '房主发到群里的那段话整条粘进来就行，会自动认出房号；也可以直接扫房主分享的二维码进房。'}</div>
     </div>`;
 
   // ---------- 导入前校验 ----------
@@ -1779,6 +1810,7 @@ var RunfastRoom = (function () {
   // ---------- 交互 ----------
   const App = {
     goHome: () => go({ name: 'home' }),
+    dismissNotice() { view.notice = null; render(); },
     goSetup: () => go({ name: 'setup', sel: [], myName: '', price: '1', manage: false }),
     goHistory: () => go({ name: 'history', editMode: false, sel: [] }),
     historyEditOn() { view.editMode = true; view.sel = []; render(); },
@@ -1815,8 +1847,9 @@ var RunfastRoom = (function () {
     },
 
     joinRoomSubmit() {
-      const code = document.getElementById('roomCode').value.trim();
-      if (!RunfastSync.validRoomCode(code)) { alert('房号是 6 位数字'); return; }
+      const raw = document.getElementById('roomCode').value;
+      const code = RunfastSync.parseRoomCode(raw);
+      if (!code) { alert('没认出房号。把房主发的那段邀请整条粘进来，或者直接输 6 位数字。'); return; }
       R.preview(code);
     },
 
@@ -1990,8 +2023,14 @@ var RunfastRoom = (function () {
   let savedRoom = null;
   try { savedRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
   if (RunfastSync.configured()) {
-    if (roomParam) R.preview(roomParam[1]);
-    else if (savedRoom && RunfastSync.validRoomCode(savedRoom.code)) R.preview(savedRoom.code, { silent: true });
+    if (roomParam) {
+      // 用掉就把 ?room= 从地址栏抹掉：留着的话每次刷新都重跑一遍进房，
+      // 房间要是已经关了就变成「刷一次弹一次」。分享链接是分享按钮另外拼的，不受影响。
+      try { history.replaceState(null, '', location.pathname); } catch (e) { /* 忽略 */ }
+      R.preview(roomParam[1]);
+    } else if (savedRoom && RunfastSync.validRoomCode(savedRoom.code)) {
+      R.preview(savedRoom.code, { silent: true });
+    }
   }
 
   render();

@@ -15,6 +15,21 @@ var RunfastSync = (function () {
   }
   const validRoomCode = (s) => typeof s === 'string' && /^[0-9]{6}$/.test(s);
 
+  // 从粘贴进来的任意文本里抠出 6 位房号：整条邀请链接、群里那段邀请话、或者干脆就是 6 位数字。
+  // 优先认 room= 参数（我们自己链接的格式，最可靠），再认「房号 xxxxxx」，最后才找孤立的 6 位数。
+  // 不用 (?<!\d) 这种后行断言——iOS 16.4 之前的 Safari 不支持，整个脚本会直接语法错误。
+  function parseRoomCode(text) {
+    if (typeof text !== 'string') return null;
+    // 全角数字先转半角：中文输入法和某些复制粘贴会带全角
+    const s = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+    const byParam = s.match(/room=(\d{6})(?!\d)/i);
+    if (byParam) return byParam[1];
+    const byLabel = s.match(/房号[^\d]{0,4}(\d{6})(?!\d)/);
+    if (byLabel) return byLabel[1];
+    const bare = s.match(/(?:^|\D)(\d{6})(?!\d)/);
+    return bare ? bare[1] : null;
+  }
+
   // SSE put 事件 → 本地房间镜像
   function applyEvent(room, path, data) {
     if (path === '/' || room == null) return data;
@@ -202,7 +217,7 @@ var RunfastSync = (function () {
     es = null; room = null; currentCode = null; cb = null;
   }
 
-  const api = { configured, genRoomCode, validRoomCode,
+  const api = { configured, genRoomCode, validRoomCode, parseRoomCode,
     newKey, findMyPid, playingCount, nameTaken, txList,
     applyEvent, normalizeRoom, signIn, getUid, createRoom, readRoom, subscribe, patch, writeRoom, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

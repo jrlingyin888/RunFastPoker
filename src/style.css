@@ -104,6 +104,12 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
   background: #9ca3af; color: #fff; font-size: 11px; font-weight: 700; }
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+/* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
+.notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
+  border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
+  border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
+.notice-x { margin-left: auto; flex-shrink: 0; border: 0; background: none;
+  color: var(--gold-soft); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; }
 /* 流水里的时间分隔：居中小灰药丸，把同一局的几笔视觉上归成一组 */
 .tx-time { text-align: center; margin: 12px 0 4px; }
 .tx-time:first-child { margin-top: 2px; }
