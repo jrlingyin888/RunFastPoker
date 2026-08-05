@@ -175,21 +175,28 @@ var RunfastRoom = (function () {
   // 比按固定时长切准得多：一局打得快打得慢都不影响分组。
   // 只留一个很宽松的时间兜底，免得中途吃个饭回来还算同一局。
   const pad2 = (n) => String(n).padStart(2, '0');
-  function txTimeHtml(at, no) {
+  function timeLabel(at, withSec) {
     const d = new Date(at);
     const now = new Date();
     const sameDay = d.getFullYear() === now.getFullYear()
       && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-    const time = (sameDay ? '' : (d.getMonth() + 1) + '月' + d.getDate() + '日 ')
-      + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-    // 带上局数：两局打得快时时间会一模一样（都是 15:10），只有时间就看着像重复渲染了
-    return `<div class="tx-time"><span>第 ${no} 局 · ${time}</span></div>`;
+    return (sameDay ? '' : (d.getMonth() + 1) + '月' + d.getDate() + '日 ')
+      + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+      + (withSec ? ':' + pad2(d.getSeconds()) : '');
   }
-  // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标局数和该组最后一笔的时间
-  function txListHtml(list, players, offset) {
-    return S.groupRounds(list, players, offset).reverse()
-      .map((g) => txTimeHtml(g.end, g.no) + g.items.slice().reverse().map(txRowHtml).join(''))
-      .join('');
+  // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标该组最后一笔的时间。
+  // 只在相邻两组撞进同一分钟时才精确到秒——那种情况只标分钟会看着像重复渲染；
+  // 平时不显示秒，一排数字读起来累。
+  function txListHtml(list, players) {
+    const groups = S.groupRounds(list, players);
+    const mins = groups.map((g) => timeLabel(g.end, false));
+    const out = [];
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const clash = mins[i] === mins[i - 1] || mins[i] === mins[i + 1];
+      out.push(`<div class="tx-time"><span>${timeLabel(groups[i].end, clash)}</span></div>`
+        + groups[i].items.slice().reverse().map(txRowHtml).join(''));
+    }
+    return out.join('');
   }
 
   // 设备 id → 该设备绑定的玩家名（找不到就空字符串）
@@ -237,7 +244,7 @@ var RunfastRoom = (function () {
       </div>
       <div class="tip">谁赢了就点谁的头像${state.local ? '' : ' · 点自己头像改名或退出'}</div>
       <div class="card">
-        ${txListHtml(list, r.players, oldRounds) || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
+        ${txListHtml(list, r.players) || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
         ${oldRounds ? `<div class="muted">这一场升级前按「局」记过 ${oldRounds} 局，分已经算进上面的头像里；从现在起每记一笔都会列在这里。</div>` : ''}
       </div>`;
   }
