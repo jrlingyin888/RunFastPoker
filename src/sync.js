@@ -73,6 +73,42 @@ var RunfastSync = (function () {
     return Object.keys(ps).some((pid) => pid !== exceptPid && ps[pid].name === name);
   }
 
+  // 某个时刻房里有几个人（中途才加入的还没来、已经退出的不算）
+  function roomSizeAt(players, at) {
+    return Object.keys(players || {}).filter((pid) => {
+      const p = players[pid];
+      if ((p.at || 0) > at) return false;                  // 那会儿还没进来
+      if (p.left && (p.leftAt || 0) <= at) return false;   // 那会儿已经走了
+      return true;
+    }).length;
+  }
+
+  // 把升序流水切成「一局一组」。跑得快一局的形状就是「其余人各给赢家转一笔」，
+  // 所以一组 = 连续的、收款人相同、付款人不重复、且不超过这一局开打时的（人数-1）笔。
+  // 「满员笔数」必须按开打那一刻的人数算而不是当前人数：3 个人时一局最多 2 笔，
+  // 中途加到 4 人后才是 3 笔——用当前人数会让旧的一局多空一格，把新加入者的第一笔
+  // 吸进上一局，看着像他参与了那局。同理，开打时还没进房的人也一律另起一局。
+  const ROUND_BREAK_GAP = 10 * 60 * 1000;   // 兜底：中途吃个饭回来不算同一局
+  function groupRounds(list, players, offset) {
+    const ps = players || {};
+    const groups = [];
+    (list || []).forEach((t) => {
+      const at = t.at || 0;
+      const g = groups[groups.length - 1];
+      const payer = ps[t.from];
+      const sameRound = g && g.to === t.to
+        && !g.items.some((x) => x.from === t.from)     // 同一个人不会在一局里付两次
+        && g.items.length < g.max
+        && (!payer || (payer.at || 0) <= g.start)      // 这局开打时他还没进房
+        && at - g.end < ROUND_BREAK_GAP;
+      if (sameRound) { g.items.push(t); g.end = at; }
+      else groups.push({ to: t.to, items: [t], start: at, end: at,
+        max: Math.max(1, roomSizeAt(ps, at) - 1) });
+    });
+    groups.forEach((g, i) => { g.no = (offset || 0) + i + 1; });
+    return groups;
+  }
+
   // 流水 map → 按时间升序的数组
   function txList(room) {
     const tx = (room && room.tx) || {};
@@ -218,7 +254,7 @@ var RunfastSync = (function () {
   }
 
   const api = { configured, genRoomCode, validRoomCode, parseRoomCode,
-    newKey, findMyPid, playingCount, nameTaken, txList,
+    newKey, findMyPid, playingCount, nameTaken, txList, roomSizeAt, groupRounds,
     applyEvent, normalizeRoom, signIn, getUid, createRoom, readRoom, subscribe, patch, writeRoom, deleteRoom, close };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;

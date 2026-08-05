@@ -175,3 +175,99 @@ test('parseRoomCode：room= 参数优先于文本里别的 6 位数', () => {
   // 没有 room= 时「房号」标签优先于前面那串孤立数字
   assert.equal(S.parseRoomCode('密码 111222，房号 333444'), '333444');
 });
+
+// ---------- 一局一组：分组逻辑 ----------
+const M = 60000;
+// 三个老玩家 + 一个中途加入的（模拟用户实测里的 Kog）
+const roomWithLateJoiner = () => ({
+  p_rong: { name: '荣', uid: 'd1', at: 0 },
+  p_mei:  { name: '美伶', uid: 'd2', at: 0 },
+  p_ye:   { name: '叶', uid: 'd3', at: 0 },
+  p_kog:  { name: 'Kog', uid: 'd4', at: 30 * M },   // 30 分钟后才进来
+});
+const tx = (from, to, at, points) => ({ id: 't' + at + from, from, to, points: points || 1, at });
+
+test('groupRounds：3 人时一局最多 2 笔，第 3 笔另起一局', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([
+    tx('p_rong', 'p_ye', 1 * M), tx('p_mei', 'p_ye', 1 * M + 5000),   // 第1局
+    tx('p_rong', 'p_ye', 2 * M), tx('p_mei', 'p_ye', 2 * M + 5000),   // 第2局（同一个赢家，靠付款人重复切开）
+  ], ps);
+  assert.deepEqual(gs.map((g) => g.items.length), [2, 2]);
+  assert.deepEqual(gs.map((g) => g.no), [1, 2]);
+});
+
+test('groupRounds：中途加入的人，第一笔不会被吸进他还没进房的那一局', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([
+    // 第1局：Kog 还没来，只有荣和美伶给叶
+    tx('p_rong', 'p_ye', 29 * M), tx('p_mei', 'p_ye', 29 * M + 5000),
+    // Kog 30 分钟时进房；第2局三人都给叶，Kog 先付
+    tx('p_kog', 'p_ye', 31 * M), tx('p_rong', 'p_ye', 31 * M + 5000), tx('p_mei', 'p_ye', 31 * M + 9000),
+  ], ps);
+  assert.deepEqual(gs.map((g) => g.items.length), [2, 3], 'Kog 那笔必须开新的一局');
+  assert.ok(!gs[0].items.some((t) => t.from === 'p_kog'), '第1局里不该出现 Kog');
+  assert.equal(gs[1].items[0].from, 'p_kog');
+  assert.deepEqual(gs.map((g) => g.max), [2, 3], '满员笔数按开打时人数算：先2后3');
+});
+
+test('groupRounds：4 人时一局 3 笔收满，第 4 笔另起一局', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([
+    tx('p_kog', 'p_ye', 40 * M), tx('p_rong', 'p_ye', 40 * M + 3000), tx('p_mei', 'p_ye', 40 * M + 6000),
+    tx('p_kog', 'p_ye', 41 * M),
+  ], ps);
+  assert.deepEqual(gs.map((g) => g.items.length), [3, 1]);
+});
+
+test('groupRounds：换个赢家就是新的一局', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([
+    tx('p_rong', 'p_ye', 40 * M), tx('p_mei', 'p_ye', 40 * M + 3000),
+    tx('p_ye', 'p_rong', 41 * M), tx('p_mei', 'p_rong', 41 * M + 3000),
+  ], ps);
+  assert.deepEqual(gs.map((g) => g.to), ['p_ye', 'p_rong']);
+  assert.deepEqual(gs.map((g) => g.items.length), [2, 2]);
+});
+
+test('groupRounds：隔太久（吃饭去了）不算同一局', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([
+    tx('p_rong', 'p_ye', 40 * M),
+    tx('p_mei', 'p_ye', 55 * M),   // 15 分钟后
+  ], ps);
+  assert.deepEqual(gs.map((g) => g.items.length), [1, 1]);
+});
+
+test('groupRounds：已退出的人不算进当时的人数', () => {
+  const ps = {
+    p_a: { name: 'A', uid: 'd1', at: 0 },
+    p_b: { name: 'B', uid: 'd2', at: 0 },
+    p_c: { name: 'C', uid: 'd3', at: 0, left: true, leftAt: 10 * M },
+  };
+  // C 走后只剩 A、B，一局最多 1 笔
+  const gs = S.groupRounds([tx('p_a', 'p_b', 20 * M), tx('p_a', 'p_b', 21 * M)], ps);
+  assert.deepEqual(gs.map((g) => g.max), [1, 1]);
+  assert.deepEqual(gs.map((g) => g.items.length), [1, 1]);
+});
+
+test('groupRounds：offset 让升级前记过的旧局接着往下编号', () => {
+  const ps = roomWithLateJoiner();
+  const gs = S.groupRounds([tx('p_rong', 'p_ye', 40 * M)], ps, 3);
+  assert.equal(gs[0].no, 4);
+});
+
+test('groupRounds：空流水与缺字段不炸', () => {
+  assert.deepEqual(S.groupRounds([], {}), []);
+  assert.deepEqual(S.groupRounds(null, null), []);
+  const gs = S.groupRounds([{ id: 't1', from: 'p_x', to: 'p_y' }], {});   // 没有 at、玩家也不在名单里
+  assert.equal(gs.length, 1);
+  assert.equal(gs[0].no, 1);
+});
+
+test('roomSizeAt：按时刻算人数', () => {
+  const ps = roomWithLateJoiner();
+  assert.equal(S.roomSizeAt(ps, 10 * M), 3);   // Kog 还没进
+  assert.equal(S.roomSizeAt(ps, 30 * M), 4);   // 正好进来
+  assert.equal(S.roomSizeAt(ps, 40 * M), 4);
+});
