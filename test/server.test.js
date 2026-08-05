@@ -565,3 +565,35 @@ test('/qr：正常返回内联 SVG；缺 text 或超长返回 400', async () => 
     assert.equal(r.status, 400);
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
+
+test('PATCH：时间戳一律服务端打，客户端传的不作数（各人手机的钟不一样，用客户端时间会让流水乱序）', async () => {
+  const df = tmpData();
+  const server = createRunfastServer({ dataFile: df });
+  const port = await listen(server);
+  try {
+    await req(port, 'PUT', '/rooms/300500', sampleRoom(), { 'X-Device-Id': 'boss' });
+    const before = Date.now();
+    // 一台「钟慢了一小时」的手机记一笔
+    await req(port, 'PATCH', '/rooms/300500',
+      { path: '/tx/t_slow', value: { from: 'p_b', to: 'p_a', points: 5, at: before - 3600000 } },
+      { 'X-Device-Id': 'x' });
+    // 一台「钟快了一小时」的手机建个玩家
+    await req(port, 'PATCH', '/rooms/300500',
+      { path: '/players/p_fast', value: { name: '快表', uid: 'y', at: before + 3600000 } },
+      { 'X-Device-Id': 'y' });
+    // 自己退出，leftAt 也该被覆写
+    await req(port, 'PATCH', '/rooms/300500', { path: '/players/p_b/left', value: true }, { 'X-Device-Id': 'x' });
+    await req(port, 'PATCH', '/rooms/300500',
+      { path: '/players/p_b/leftAt', value: before - 3600000 }, { 'X-Device-Id': 'x' });
+    const room = JSON.parse((await req(port, 'GET', '/rooms/300500')).body);
+    const after = Date.now();
+    const inWindow = (v, what) => assert.ok(v >= before && v <= after, what + ' 应是服务端时间，实际 ' + v);
+    inWindow(room.tx.t_slow.at, '流水的 at');
+    inWindow(room.players.p_fast.at, '新玩家的 at');
+    inWindow(room.players.p_b.leftAt, '退出时间 leftAt');
+    // 回归时清 leftAt 仍然要能置空
+    await req(port, 'PATCH', '/rooms/300500', { path: '/players/p_b/leftAt', value: null }, { 'X-Device-Id': 'x' });
+    const back = JSON.parse((await req(port, 'GET', '/rooms/300500')).body);
+    assert.ok(!('leftAt' in back.players.p_b), '回归时 leftAt 应被删掉');
+  } finally { server.close(); fs.rmSync(df, { force: true }); }
+});

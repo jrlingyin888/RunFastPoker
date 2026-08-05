@@ -368,6 +368,13 @@ function createRunfastServer(options = {}) {
         // 就会抛 TypeError，逃出这个 try 之后没人接得住（async handler 的 rejection 没人 catch），
         // 直接把整个进程打挂。一条 curl 就能秒杀公网服务，必须单独挡。
         if (!payload || typeof payload !== 'object') { json(res, 400, { error: 'bad json' }); return; }
+        // 时间戳一律由服务端打，客户端传的一概不作数。各人手机的钟差几秒到几分钟很常见，
+        // 用客户端时间会让流水按「谁的表慢」排序而不是按提交顺序，看着就像有人插队；
+        // 分组还要拿 player.at 和 tx.at 互相比（判断谁在这局开打前进的房），两个钟一混就全乱。
+        if (typeof payload.path === 'string' && /^\/players\/[^/]+\/leftAt$/.test(payload.path)
+            && payload.value !== null) {
+          payload.value = Date.now();
+        }
         if (typeof payload.path === 'string' && payload.value && typeof payload.value === 'object') {
           if (payload.path.startsWith('/tx/')) {
             // 一笔流水的字段白名单：只留这五个。isValidTx 只查 from/to/points，夹带的
@@ -375,15 +382,13 @@ function createRunfastServer(options = {}) {
             // 是继 /finishedAt 之后的第二条「把房间撑大」的路。at 非数字就用服务端时间。
             // byUid 由服务端按身份头覆写，客户端传什么都不作数——前端靠它判断「别人代记」，
             // 能伪造就等于白记。
-            const at = Number.isFinite(payload.value.at) ? payload.value.at : Date.now();
             payload.value = { from: payload.value.from, to: payload.value.to,
-              points: payload.value.points, byUid: me, at };
+              points: payload.value.points, byUid: me, at: Date.now() };
           } else if (/^\/players\/[^/]+$/.test(payload.path)) {
             // 建玩家的字段白名单：只认 name/uid/at，防止夹带 left:true 之类的字段——
             // 否则一个刚建好的玩家能直接生下来就是「已退出」态，而清 left 要求 uid===me、
             // uid=null 的代记玩家永远满足不了这条，等于这个人再也回不来。
-            const at = Number.isFinite(payload.value.at) ? payload.value.at : Date.now();
-            payload.value = { name: payload.value.name, uid: payload.value.uid, at };
+            payload.value = { name: payload.value.name, uid: payload.value.uid, at: Date.now() };
           }
         }
         const old = rooms[code] || null;
