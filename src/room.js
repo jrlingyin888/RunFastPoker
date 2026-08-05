@@ -21,8 +21,13 @@ var RunfastRoom = (function () {
   function lastName() { try { return localStorage.getItem(LAST_NAME_KEY) || ''; } catch (e) { return ''; } }
 
   // ---------- 进房 ----------
-  // 先只读一次房间，决定进「新加入」还是「回到原位置」，真正订阅放到用户确认之后。
-  async function preview(code) {
+  // 先只读一次房间，再决定去哪：
+  //   还在房里（没点过退出）→ 直接回记分页。刷新、切后台回来、重新扫码都走这条，
+  //     用户没退出就不该被拦一道确认页——这是最常见的路径，必须一步到位。
+  //   退出过 / 没进过 → 输名字页（退出过的会预填原名，可改，位置和分数不变）。
+  // opts.silent：开机自动回房用，房间没了就安静回首页，不要弹窗吓人。
+  async function preview(code, opts) {
+    const silent = !!(opts && opts.silent);
     try {
       await S.signIn();
       state.uid = S.getUid();
@@ -31,15 +36,20 @@ var RunfastRoom = (function () {
         let saved = null;
         try { saved = JSON.parse(localStorage.getItem(ROOM_KEY) || 'null'); } catch (e) { /* 忽略 */ }
         if (saved && saved.code === code) localStorage.removeItem(ROOM_KEY);
+        if (silent) { host.go({ name: 'home' }); return; }
         alert('房间 ' + code + ' 暂时进不去，可能房主还没建好或已关闭。已帮你填好房号，稍后点「进入房间」重试即可。');
         host.go({ name: 'joinRoom', code });
         return;
       }
       const pid = S.findMyPid(data, state.uid);
       state.room = data;
+      if (pid && !data.players[pid].left) { await attach(code, pid); return; }
       // 字段叫 myName 不叫 name —— 路由对象上的 name 是视图名（'joinName'），撞了会把视图名渲染进输入框
       host.go({ name: 'joinName', code, pid, myName: pid ? data.players[pid].name : lastName() });
-    } catch (e) { alert('进入房间失败：' + e.message); }
+    } catch (e) {
+      if (silent) { host.go({ name: 'home' }); return; }
+      alert('进入房间失败：' + e.message);
+    }
   }
 
   // ---------- 输名字 / 确认回归 ----------
@@ -128,12 +138,14 @@ var RunfastRoom = (function () {
       : (!state.local && pid === state.pid) ? '<span class="me-tag">我</span>'
       : (!state.local && p.uid == null) ? '<span class="proxy-tag">代</span>' : '';
     const sign = points > 0 ? '+' : '';
-    // 身份小药丸单独一行：座位只有 64px 宽，名字那行是 nowrap+省略号，
-    // 塞在名字后面会被整个裁掉（「丽叶已退出」只剩「丽叶…」，看不出为什么是灰的）
+    // 身份小药丸叠在头像右下角：跟着名字排会被 nowrap+省略号裁掉（「丽叶已退出」只剩「丽叶…」），
+    // 自成一行又会把整列撑高一截。压在头像角上两个毛病都没有。
     return `<button class="seat${left ? ' left' : ''}${(!state.local && pid === state.pid) ? ' me' : ''}"
         data-room-act="seat" data-pid="${esc(pid)}">
-      <span class="ava" style="background:${U.avatarColor(p.name)}">${esc(U.initial(p.name))}</span>
-      <span class="nm">${esc(p.name)}</span>${tag}
+      <span class="ava-wrap">
+        <span class="ava" style="background:${U.avatarColor(p.name)}">${esc(U.initial(p.name))}</span>${tag}
+      </span>
+      <span class="nm">${esc(p.name)}</span>
       <span class="pts ${points > 0 ? 'pos' : points < 0 ? 'neg' : ''}">${sign}${points}</span>
     </button>`;
   }
@@ -150,6 +162,34 @@ var RunfastRoom = (function () {
       <span class="amt">${t.points}</span>
     </div>`;
   }
+  // 流水每隔一段时间插一条时间戳（像聊天记录那样），不是每笔都标。
+  // 这一版不记「第几局」，牌友只能靠时间线判断哪几笔是同一局的，
+  // 所以按「距上一组开头超过 2 分钟就另起一组」分段——正好接近牌桌上一局的节奏。
+  const TX_GROUP_GAP = 2 * 60 * 1000;
+  const pad2 = (n) => String(n).padStart(2, '0');
+  function txTimeHtml(at) {
+    const d = new Date(at);
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    const label = (sameDay ? '' : (d.getMonth() + 1) + '月' + d.getDate() + '日 ')
+      + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    return `<div class="tx-time"><span>${label}</span></div>`;
+  }
+  // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标该组最晚那笔的时间
+  function txListHtml(list) {
+    const groups = [];
+    list.forEach((t) => {
+      const at = t.at || 0;
+      const g = groups[groups.length - 1];
+      if (!g || at - g.start >= TX_GROUP_GAP) groups.push({ start: at, end: at, items: [t] });
+      else { g.end = at; g.items.push(t); }
+    });
+    return groups.reverse()
+      .map((g) => txTimeHtml(g.end) + g.items.slice().reverse().map(txRowHtml).join(''))
+      .join('');
+  }
+
   // 设备 id → 该设备绑定的玩家名（找不到就空字符串）
   function deviceName(uid) {
     const ps = state.room.players;
@@ -171,7 +211,7 @@ var RunfastRoom = (function () {
         <button class="btn" onclick="App.goHome()">返回首页</button>`;
     }
     const price = L.fenToYuan(r.pricePerCardFen);
-    const list = S.txList(r).slice().reverse();          // 最新在上
+    const list = S.txList(r);          // 升序；txListHtml 负责分组、插时间戳、倒序输出
     const net = netOf();
     const pids = Object.keys(r.players).sort((a, b) => (r.players[a].at || 0) - (r.players[b].at || 0));
     const actions = (state.local ? '' : '<button class="icon-btn" onclick="Room.share()">分享</button>')
@@ -183,7 +223,7 @@ var RunfastRoom = (function () {
     const oldRounds = state.local ? (state.session.rounds || []).length : 0;
     const size = state.local ? L.sessionSize(state.session) : S.txList(r).length + ' 笔';
     return `
-      ${U.topbar('已记 ' + size + ' · ' + price + '元/张', state.local ? 'App.goHome()' : '', actions)}
+      ${U.topbar('已记 ' + size + ' · ' + price + '元/张', 'App.goHome()', actions)}
       ${bar}
       <div class="card">
         <div class="players">
@@ -195,7 +235,7 @@ var RunfastRoom = (function () {
       </div>
       <div class="tip">谁赢了就点谁的头像${state.local ? '' : ' · 点自己头像改名或退出'}</div>
       <div class="card">
-        ${list.map(txRowHtml).join('') || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
+        ${txListHtml(list) || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
         ${oldRounds ? `<div class="muted">这一场升级前按「局」记过 ${oldRounds} 局，分已经算进上面的头像里；从现在起每记一笔都会列在这里。</div>` : ''}
       </div>`;
   }
@@ -289,8 +329,9 @@ var RunfastRoom = (function () {
       onRoom(room) {
         state.room = room;
         if (room.status === 'finished') { finishLocally(); return; }
+        // 只重绘、不跳转：进房那一下 attach 末尾已经跳过了。这里再跳的话，
+        // 人跑去首页/历史看东西时，房里别人一记分就把他拽回记分页。
         if (['room', 'rounds', 'settle'].includes(host.view().name)) host.render();
-        else host.go({ name: 'room' });
       },
       onStatus(st) {
         state.status = st;

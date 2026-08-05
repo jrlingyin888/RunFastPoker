@@ -499,8 +499,16 @@
     else if (act === 'pick') App.historyToggle(sid);
   });
 
+  // 开场路由：扫码/链接带房号就进那个房；否则只要本机还记着房号（没点过「退出房间」），
+  // 就自动回到那个房间的记分页——用户切后台、刷新、重开浏览器都算「还在房里」，
+  // 不该每次都先落到首页再手动点一次。房间没了就安静回首页，不弹窗。
   const roomParam = location.search.match(/[?&]room=([0-9]{6})\b/);
-  if (roomParam && RunfastSync.configured()) R.preview(roomParam[1]);
+  let savedRoom = null;
+  try { savedRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
+  if (RunfastSync.configured()) {
+    if (roomParam) R.preview(roomParam[1]);
+    else if (savedRoom && RunfastSync.validRoomCode(savedRoom.code)) R.preview(savedRoom.code, { silent: true });
+  }
 
   render();
 })();

@@ -87,14 +87,26 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .seat .nm { display: block; font-size: 12px; line-height: 1.4; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .seat .pts { display: block; font-size: 13px; font-weight: 800; }
-/* 座位里的身份药丸自成一行（名字那行放不下），去掉挨着名字用的左边距 */
-.seat .me-tag, .seat .proxy-tag, .seat .left-tag { margin-left: 0; }
+/* 座位里的身份药丸压在头像右下角：不占名字那行、也不额外撑高一行。
+   .proxy-tag 在流水里还是行内用法，所以这套定位只作用在 .seat 内 */
+.seat .ava-wrap { position: relative; display: block; width: 48px; margin: 0 auto; }
+.seat .me-tag, .seat .proxy-tag, .seat .left-tag {
+  position: absolute; right: -5px; bottom: 3px; margin: 0; padding: 0 5px;
+  font-size: 10px; line-height: 15px; white-space: nowrap;
+  border: 1.5px solid var(--cream);   /* 描一圈米色，压在深色头像上也不糊成一团 */
+}
+.seat .me-tag { background: var(--gold); color: #4a3a08; }   /* 「我」用醒目金底，一眼看到自己 */
 .seat.me .ava { box-shadow: 0 0 0 2px var(--gold); }
 .seat.left { opacity: .45; }
 .left-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 999px;
   background: #9ca3af; color: #fff; font-size: 11px; font-weight: 700; }
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+/* 流水里的时间分隔：居中小灰药丸，把同一局的几笔视觉上归成一组 */
+.tx-time { text-align: center; margin: 12px 0 4px; }
+.tx-time:first-child { margin-top: 2px; }
+.tx-time span { display: inline-block; padding: 2px 10px; border-radius: 999px;
+  background: #e9e4d5; color: #6b7280; font-size: 12px; }
 .who { color: #1d4ed8; font-weight: 700; }
 .amt { font-weight: 800; font-size: 17px; flex-shrink: 0; }
 /* 支出弹窗 */
