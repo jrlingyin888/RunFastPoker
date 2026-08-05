@@ -79,7 +79,9 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .proxy-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
   background: var(--win); color: #fff4e6; font-size: 12px; font-weight: 700; }  /* 代占的座位：暖琥珀，和绿色「我」区分开 */
 /* 头像行：谁赢了点谁 */
-.players { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+/* overflow-x:auto 会让另一轴也变成 auto（CSS 规范），「我」头像那圈 2px 金环
+   贴着上边缘就被裁掉了，所以上下都留出内边距 */
+.players { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0; }
 .seat { flex: 0 0 auto; width: 64px; border: 0; background: none; padding: 0; cursor: pointer; color: var(--ink); }
 .seat .ava { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px;
   margin: 0 auto 5px; border-radius: 50%; color: #fff; font-size: 20px; font-weight: 700; }

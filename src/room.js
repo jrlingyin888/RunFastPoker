@@ -162,11 +162,28 @@ var RunfastRoom = (function () {
       <span class="amt">${t.points}</span>
     </div>`;
   }
-  // 流水每隔一段时间插一条时间戳（像聊天记录那样），不是每笔都标。
-  // 这一版不记「第几局」，牌友只能靠时间线判断哪几笔是同一局的，
-  // 所以按「距上一组开头超过 2 分钟就另起一组」分段——正好接近牌桌上一局的节奏。
-  const TX_GROUP_GAP = 2 * 60 * 1000;
+  // 流水按「一局」分组，每组顶上标一次时间（不是每笔都标）。
+  // 跑得快一局的形状就是「其余人各给赢家转一笔」，所以一组 =
+  // 连续的、收款人相同、付款人不重复、且不超过（在场人数-1）笔。
+  // 比按固定时长切准得多：一局打得快打得慢都不影响分组。
+  // 只留一个很宽松的时间兜底，免得中途吃个饭回来还算同一局。
+  const TX_BREAK_GAP = 10 * 60 * 1000;
   const pad2 = (n) => String(n).padStart(2, '0');
+  function txGroups(list, seatCount) {
+    const maxPer = Math.max(1, seatCount - 1);
+    const groups = [];
+    list.forEach((t) => {
+      const at = t.at || 0;
+      const g = groups[groups.length - 1];
+      const sameRound = g && g.to === t.to
+        && !g.items.some((x) => x.from === t.from)   // 同一个人不会在一局里付两次
+        && g.items.length < maxPer
+        && at - g.end < TX_BREAK_GAP;
+      if (sameRound) { g.items.push(t); g.end = at; }
+      else groups.push({ to: t.to, items: [t], end: at });
+    });
+    return groups;
+  }
   function txTimeHtml(at) {
     const d = new Date(at);
     const now = new Date();
@@ -176,16 +193,9 @@ var RunfastRoom = (function () {
       + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
     return `<div class="tx-time"><span>${label}</span></div>`;
   }
-  // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标该组最晚那笔的时间
-  function txListHtml(list) {
-    const groups = [];
-    list.forEach((t) => {
-      const at = t.at || 0;
-      const g = groups[groups.length - 1];
-      if (!g || at - g.start >= TX_GROUP_GAP) groups.push({ start: at, end: at, items: [t] });
-      else { g.end = at; g.items.push(t); }
-    });
-    return groups.reverse()
+  // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标该组最后一笔的时间
+  function txListHtml(list, seatCount) {
+    return txGroups(list, seatCount).reverse()
       .map((g) => txTimeHtml(g.end) + g.items.slice().reverse().map(txRowHtml).join(''))
       .join('');
   }
@@ -235,7 +245,7 @@ var RunfastRoom = (function () {
       </div>
       <div class="tip">谁赢了就点谁的头像${state.local ? '' : ' · 点自己头像改名或退出'}</div>
       <div class="card">
-        ${txListHtml(list) || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
+        ${txListHtml(list, pids.length) || (oldRounds ? '' : '<div class="muted">还没有记录，谁赢了就点谁的头像</div>')}
         ${oldRounds ? `<div class="muted">这一场升级前按「局」记过 ${oldRounds} 局，分已经算进上面的头像里；从现在起每记一笔都会列在这里。</div>` : ''}
       </div>`;
   }
