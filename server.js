@@ -263,15 +263,24 @@ function createRunfastServer(options = {}) {
     try { fs.writeFileSync(dataFile, JSON.stringify(rooms)); } catch (e) { /* 忽略 */ }
   }
 
+  // 只用于首帧：连上来先给一份整房快照，之后的改动都走 broadcast 的增量帧
   function sendFrame(res, data) {
     res.write('event: put\n');
     res.write('data: ' + JSON.stringify({ path: '/', data }) + '\n\n');
   }
-  function broadcast(code) {
+  // 广播一次改动。path 给了就只推那一格（客户端 applyEvent 本来就按路径打补丁），
+  // 没给就推整房（PUT / DELETE / 首帧这种整体替换）。
+  // 差别很大：一笔流水的增量帧 97 字节，而整房快照打到 600 笔时是 44KB、1200 笔 87KB——
+  // 每记一笔要乘以房里的人数发出去，人越多、打得越久越容易把手机那点带宽塞死。
+  // 序列化也只做一次，不再每个订阅者各来一遍。
+  function broadcast(code, path, value) {
     const set = subscribers.get(code);
-    if (!set) return;
-    const data = rooms[code] || null;
-    for (const res of set) sendFrame(res, data);
+    if (!set || !set.size) return;
+    const full = path === undefined;
+    const frame = 'event: put\ndata: '
+      + JSON.stringify({ path: full ? '/' : path, data: full ? (rooms[code] || null) : value })
+      + '\n\n';
+    for (const res of set) res.write(frame);
   }
   function clientCount() {
     let n = 0;
@@ -397,7 +406,8 @@ function createRunfastServer(options = {}) {
         // 一旦中间让出线程，两个并发请求就可能都读到「还没这个 key」从而先后覆盖同一笔。
         if (!canPatch(old, payload.path, payload.value, me)) { json(res, 403, { error: 'forbidden' }); return; }
         rooms[code] = setPath(old, payload.path, payload.value);
-        scheduleSave(); broadcast(code);
+        // 只推被改的那一格。整房是 44KB 起步，这里通常不到 100 字节。
+        scheduleSave(); broadcast(code, payload.path, payload.value);
         json(res, 200, { ok: true });
         return;
       }

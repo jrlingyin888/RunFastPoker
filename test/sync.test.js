@@ -68,6 +68,23 @@ test('createRoom：撞房号（写入 403）时换个号重试，不把 403 冒�
   } finally { global.fetch = realFetch; }
 });
 
+// 建房只该发一次请求。以前先 GET 探一下房号有没有人用，再 PUT —— 但服务端的 canWrite 里
+// `if (old) return false` 本来就禁止整房覆盖，撞号必然 403，而 403 上面那条用例已经在重试了。
+// 那个 GET 纯属白等一个来回：公网上每个来回 100~300ms，用户点「创建房间」要卡半秒才进房。
+test('createRoom：顺利建房只发一个请求，不再多探一次房号', async () => {
+  const realFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, opt) => {
+    calls.push(((opt && opt.method) || 'GET') + ' ' + url);
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  try {
+    await S.createRoom({ name: '甲', pricePerCardFen: 100 });
+    assert.equal(calls.length, 1, '建房不该有额外的探号往返：' + calls.join(' | '));
+    assert.match(calls[0], /^PUT /);
+  } finally { global.fetch = realFetch; }
+});
+
 test('createRoom：非 403 的写入失败照旧抛出去，不被当成撞号吞掉', async () => {
   const realFetch = global.fetch;
   global.fetch = async (url, opt) => {

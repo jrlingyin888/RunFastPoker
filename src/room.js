@@ -14,7 +14,49 @@ var RunfastRoom = (function () {
   function init(h) { host = Object.assign(host, h); }
 
   const state = { active: false, local: false, code: null, room: null, session: null,
-    uid: null, pid: null, status: 'idle', payFrom: null, payTo: null };
+    uid: null, pid: null, status: 'idle', payFrom: null, payTo: null, txAll: false };
+
+  // ---------- 乐观更新 ----------
+  // 记一笔要等 PATCH 打个来回（4G 上 200~400ms）才关弹窗、再等 SSE 回声才看到分数，
+  // 一次点击的感知延迟能到 800ms。改成：本地立刻记上、立刻关窗，网络在后台跑；
+  // 服务端回声到了就换成权威那份，失败就撤回并告诉用户。
+  // 房间快照每帧整个被换掉，所以待确认的这几笔要在每帧重新贴回去（见 mergePending）。
+  // 一律返回新对象、不改传进来的那份：sync 里那个 room 是权威镜像，
+  // 把还没确认的几笔写进去的话，「服务端到底收下了没有」就再也分不清了。
+  let pendingTx = Object.create(null);
+  function mergePending(room) {
+    const ids = Object.keys(pendingTx);
+    if (!room || !room.tx || !ids.length) return room;
+    const tx = Object.assign({}, room.tx);
+    ids.forEach((id) => {
+      if (tx[id]) delete pendingTx[id];        // 服务端已经收下并回声了，本地这份可以退休
+      else tx[id] = pendingTx[id];
+    });
+    return Object.assign({}, room, { tx });
+  }
+  function dropPending(id) {
+    delete pendingTx[id];
+    if (!state.room || !state.room.tx || !state.room.tx[id]) return;
+    const tx = Object.assign({}, state.room.tx);
+    delete tx[id];
+    state.room = Object.assign({}, state.room, { tx });
+  }
+
+  // ---------- 重绘合并 ----------
+  // 八个人同时记分就是一串背靠背的广播，每帧都 $app.innerHTML= 整页的话，
+  // 主线程要连着做八次「拆 DOM + 重建 + 重排」。同一帧内合并成一次，屏幕上没有任何区别。
+  let rafId = 0;
+  // 一律用 typeof 探：直接写裸标识符，环境里没有这个全局时会在模块加载那一刻抛
+  // ReferenceError，整个脚本都跑不起来（Node 下的测试就当场撞上过）。
+  const hasRaf = typeof requestAnimationFrame === 'function'
+    && typeof cancelAnimationFrame === 'function';
+  const raf = hasRaf ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+  const unraf = hasRaf ? cancelAnimationFrame : clearTimeout;
+  function scheduleRender() {
+    if (rafId) return;
+    rafId = raf(() => { rafId = 0; host.render(); });
+  }
+  function cancelRender() { if (rafId) { unraf(rafId); rafId = 0; } }
 
   const LAST_NAME_KEY = 'runfast.lastName';
   const ROOM_KEY = 'runfast.sync.room';
@@ -41,6 +83,9 @@ var RunfastRoom = (function () {
         return;
       }
       const pid = S.findMyPid(data, state.uid);
+      // code 和 room 一起写：全局不变式是「state.room 是 state.code 那个房的数据」，
+      // attach() 靠它判断手上这份快照能不能留着用（见那边的注释）。
+      state.code = code;
       state.room = data;
       if (pid && !data.players[pid].left) { await attach(code, pid); return; }
       // 字段叫 myName 不叫 name —— 路由对象上的 name 是视图名（'joinName'），撞了会把视图名渲染进输入框
@@ -187,14 +232,26 @@ var RunfastRoom = (function () {
   // 吃升序流水，吐倒序 HTML（最新在上）：每组顶上标该组最后一笔的时间。
   // 只在相邻两组撞进同一分钟时才精确到秒——那种情况只标分钟会看着像重复渲染；
   // 平时不显示秒，一排数字读起来累。
+  // 默认只渲染最近这些局。牌局一晚上能记出几百笔，但没人会往回翻几百行——
+  // 全渲染的代价是每收到一次广播就要拆掉重建几千个节点（实测 8 人 600 笔一次 11.8ms，
+  // 中端安卓要乘 4~8 倍），人越多、打得越久越卡。上限之外的折起来，想看点一下就展开。
+  // 只影响「显示」：每个人的分是 netOf() 按全部流水算的，跟这里渲染几局无关。
+  const TX_GROUPS_SHOWN = 10;
   function txListHtml(list, players) {
-    const groups = S.groupRounds(list, players);
+    const all = S.groupRounds(list, players);
+    const hidden = state.txAll ? 0 : Math.max(0, all.length - TX_GROUPS_SHOWN);
+    const groups = hidden ? all.slice(hidden) : all;
     const mins = groups.map((g) => timeLabel(g.end, false));
     const out = [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const clash = mins[i] === mins[i - 1] || mins[i] === mins[i + 1];
       out.push(`<div class="tx-time"><span>${timeLabel(groups[i].end, clash)}</span></div>`
         + groups[i].items.slice().reverse().map(txRowHtml).join(''));
+    }
+    // 最新在上，所以「展开更早的」挂在最下面
+    if (hidden) {
+      out.push(`<button class="btn btn-sm" style="width:100%;margin-top:6px"
+        onclick="Room.showAllTx()">展开更早的 ${hidden} 局（共 ${list.length} 笔）</button>`);
     }
     return out.join('');
   }
@@ -331,20 +388,25 @@ var RunfastRoom = (function () {
   async function attach(code, pid) {
     await S.signIn();
     state.uid = S.getUid();          // 建房那条路没走过 preview()，这里补上设备 id
+    // 换房就必须先把上一个房间扔掉。roomView() 直接读 state.room，留着的话首帧 SSE 到达前
+    // 渲染的是上一局的人数和流水、房号却已经是新的 —— 「结束本场」后再建房最容易撞上：
+    // finishLocally() 会特意给建房人留着旧房好在结算页关房，那份数据就一路带进了新房。
+    // 只在换房时清：preview() 刚读到的这个房的快照要留着直接渲染，不然回房要白闪一下「连接中…」。
+    if (state.code !== code) state.room = null;
     state.active = true; state.local = false;
     state.code = code; state.pid = pid; state.status = 'connecting';
     try { localStorage.setItem(ROOM_KEY, JSON.stringify({ code })); } catch (e) { /* 忽略 */ }
     await S.subscribe(code, {
       onRoom(room) {
-        state.room = room;
+        state.room = mergePending(room);
         if (room.status === 'finished') { finishLocally(); return; }
         // 只重绘、不跳转：进房那一下 attach 末尾已经跳过了。这里再跳的话，
         // 人跑去首页/历史看东西时，房里别人一记分就把他拽回记分页。
-        if (['room', 'rounds', 'settle'].includes(host.view().name)) host.render();
+        if (['room', 'rounds', 'settle'].includes(host.view().name)) scheduleRender();
       },
       onStatus(st) {
         state.status = st;
-        if (host.view().name === 'room') host.render();
+        if (host.view().name === 'room') scheduleRender();
       },
       onDeleted() {
         const mine = state.room && state.room.creatorUid === state.uid;
@@ -370,10 +432,12 @@ var RunfastRoom = (function () {
   // 断开并清空内存态（不动 localStorage）
   function resetState() {
     S.close();
+    cancelRender();   // 已排队但还没跑的那次重绘属于上一个房间，别让它落在下一页上
     closePay();   // 支出弹窗可能还开着（房间被删/结算/退出这类打断），别让黑色蒙层卡在下一页上
     state.active = false; state.local = false; state.code = null;
     state.room = null; state.session = null; state.pid = null; state.status = 'idle';
-    state.payFrom = null; state.payTo = null;
+    state.payFrom = null; state.payTo = null; state.txAll = false;
+    pendingTx = Object.create(null);   // 没发出去的那几笔跟着房间一起作废，别贴到下一个房间去
   }
   // 主动退出 / 房间被关：额外忘掉「回到联机房间」入口，首页就不再显示它
   function close() {
@@ -406,9 +470,12 @@ var RunfastRoom = (function () {
         if (pid) {
           const me = state.room.players[pid];
           if (me.name !== name) await S.patch(v.code, '/players/' + pid + '/name', name);
+          // 两笔互不依赖，并发发：串行的话回归房间要多等一个往返才进得去
           if (me.left) {
-            await S.patch(v.code, '/players/' + pid + '/left', null);
-            await S.patch(v.code, '/players/' + pid + '/leftAt', null);
+            await Promise.all([
+              S.patch(v.code, '/players/' + pid + '/left', null),
+              S.patch(v.code, '/players/' + pid + '/leftAt', null),
+            ]);
           }
         } else {
           pid = S.newKey('p_');
@@ -431,10 +498,13 @@ var RunfastRoom = (function () {
     async leave() {
       if (!confirm('退出房间？分数会留在房间里，想回来让牌友把房号或二维码发给你。')) return;
       if (!state.local) {
-        try {
-          await S.patch(state.code, '/players/' + state.pid + '/left', true);
-          await S.patch(state.code, '/players/' + state.pid + '/leftAt', Date.now());
-        } catch (e) { /* 网络不好也让他走，回来时重新认设备即可 */ }
+        // 不等网络：这两笔本来就「失败也照样走」（下面的 catch 一直是空的），
+        // 那就没理由让用户对着两个串行往返干等半秒。两笔互不依赖，并发发出去即可。
+        const code = state.code, pid = state.pid;
+        Promise.all([
+          S.patch(code, '/players/' + pid + '/left', true),
+          S.patch(code, '/players/' + pid + '/leftAt', Date.now()),
+        ]).catch(() => { /* 网络不好也让他走，回来时重新认设备即可 */ });
       }
       close();
       host.go({ name: 'home' });
@@ -462,6 +532,7 @@ var RunfastRoom = (function () {
       U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
     },
     setPayer(pid) { state.payFrom = pid; renderPay(); },
+    showAllTx() { state.txAll = true; host.render(); },
 
     async submitPay() {
       const raw = ((document.getElementById('payPoints') || {}).value || '').trim();
@@ -489,10 +560,20 @@ var RunfastRoom = (function () {
         closePay();
         return;
       }
-      try {
-        await S.patch(state.code, '/tx/' + S.newKey('t_'), tx);
-        closePay();
-      } catch (e) { alert('记分失败，请重试：' + e.message); }
+      // 乐观更新：先记上、先关窗，网络在后台跑。at 用「不早于最后一笔」的本地时间，
+      // 免得这台手机的钟慢了几秒、这笔就插到流水中间去（服务端回声会把它换成权威时间）。
+      const id = S.newKey('t_');
+      const last = S.txList(state.room);
+      tx.at = Math.max(tx.at, last.length ? (last[last.length - 1].at || 0) + 1 : 0);
+      pendingTx[id] = tx;
+      state.room = mergePending(state.room);
+      closePay();
+      host.render();
+      S.patch(state.code, '/tx/' + id, tx).catch((e) => {
+        dropPending(id);
+        host.render();
+        alert('这笔没记上（' + e.message + '），请重记一次');
+      });
     },
 
     // ＋：邀请牌友扫码 / 直接加没带手机的人
@@ -522,10 +603,13 @@ var RunfastRoom = (function () {
     // 次按钮走系统分享发链接文字，长按卡片存整张。生成失败退回旧的简单面板（房号+二维码+复制），不卡住。
     async share() {
       const link = inviteLink(), code = state.code;
-      let cv;
-      try { cv = await RunfastShare.drawInviteCard(code, link); }
-      catch (e) { Room.shareFallback(); return; }
-      const blob = await RunfastShare.toBlob(cv);
+      // 画卡和转 blob 一起兜住：这两步任何一步抛出去都没人接得住（内联 onclick 不 await），
+      // 而触发它的那个菜单已经被 openSheet 的委托关掉了 —— 用户看到的就是「闪一下，什么都没弹」。
+      let blob = null;
+      try {
+        const cv = await RunfastShare.drawInviteCard(code, link);
+        blob = await RunfastShare.toBlob(cv);
+      } catch (e) { blob = null; }
       if (!blob) { Room.shareFallback(); return; }
       if (inviteUrl) URL.revokeObjectURL(inviteUrl);
       inviteBlob = blob;

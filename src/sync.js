@@ -34,9 +34,15 @@ var RunfastSync = (function () {
   function applyEvent(room, path, data) {
     if (path === '/' || room == null) return data;
     const keys = path.replace(/^\//, '').split('/');
-    const next = JSON.parse(JSON.stringify(room));
+    // 只克隆路径上那几个节点（房间 → tx → 那一笔），不再整房 JSON 深拷贝：
+    // 深拷贝是 O(全部流水)，而广播现在每笔都来一条，打到几百笔就是每条事件都白拷一遍整房。
+    // 路径克隆是 O(路径深度)，没被碰到的部分直接复用同一份引用。
+    const next = Object.assign({}, room);
     let node = next;
-    for (let i = 0; i < keys.length - 1; i++) node = node[keys[i]] ||= {};
+    for (let i = 0; i < keys.length - 1; i++) {
+      node[keys[i]] = Object.assign({}, node[keys[i]]);
+      node = node[keys[i]];
+    }
     const last = keys[keys.length - 1];
     if (data === null) delete node[last];
     else node[last] = data;
@@ -173,12 +179,13 @@ var RunfastSync = (function () {
   }
 
   // 建房：房号试 5 次，建房人自己就是第一个玩家。
+  // 不先 GET 探房号在不在：服务端 canWrite 的 `if (old) return false` 本来就禁止整房覆盖，
+  // 撞号必然 403，下面已经在按 403 换号重试了 —— 探这一下只是白等一个来回。公网上每个来回
+  // 100~300ms，用户点「创建房间」得多卡这么久才进房，而 6 位号撞车本来就几乎不会发生。
   async function createRoom(init) {
     await signIn();
     for (let i = 0; i < 5; i++) {
       const code = genRoomCode();
-      const { data } = await readRoom(code);
-      if (data !== null) continue; // 房号被占用，换一个
       const pid = newKey('p_');
       try {
         await writeRoom(code, {
@@ -241,6 +248,10 @@ var RunfastSync = (function () {
   function onEvt(e) {
     if (!cb) return; // close() 之后到达的迟到事件
     const { path, data } = JSON.parse(e.data);
+    // 补丁帧必须打在已有镜像上。连上来的首帧一定是全量，所以正常走不到这里；
+    // 真要是没镜像就收到补丁，宁可丢掉等下一帧，也不能让 applyEvent 的 room==null
+    // 分支把整个房间替换成「一笔流水」——那会当场触发 onDeleted，把人踢回首页。
+    if (path !== '/' && room == null) return;
     room = normalizeRoom(applyEvent(room, path, data));
     if (room === null) { if (cb.onDeleted) cb.onDeleted(); return; }
     if (cb.onRoom) cb.onRoom(room);

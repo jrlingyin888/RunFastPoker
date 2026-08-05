@@ -339,7 +339,18 @@ test('SSE：连上先收首帧全量，房间更新后收到广播', async () =>
   try {
     assert.equal(frames[0].path, '/');
     assert.equal(frames[0].data.status, 'active');    // 首帧全量
-    assert.equal(frames[1].data.status, 'finished');  // 广播到更新（PATCH 结束本场触发）
+    // 之后只推被改的那一格：整房快照打到几百笔就是几十 KB，还要乘以房里的人数
+    assert.equal(frames[1].path, '/status');
+    assert.equal(frames[1].data, 'finished');
+    assert.ok(JSON.stringify(frames[1]).length < 60, '增量帧应该很小：' + JSON.stringify(frames[1]));
+
+    // 真正要保证的是「客户端照着这两帧拼出来的房间是对的」——拿前端那份 applyEvent 走一遍
+    const S = require('../src/sync.js');
+    let mirror = null;
+    for (const f of frames) mirror = S.applyEvent(mirror, f.path, f.data);
+    assert.equal(mirror.status, 'finished');
+    assert.deepEqual(Object.keys(mirror.players), Object.keys(sampleRoom().players), '补丁不能把别的字段冲掉');
+    assert.equal(mirror.pricePerCardFen, sampleRoom().pricePerCardFen);
   } finally { server.close(); try { fs.unlinkSync(df); } catch (e) {} }
 });
 

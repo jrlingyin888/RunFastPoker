@@ -92,11 +92,20 @@ var RunfastShare = (function () {
     return cv;
   }
 
-  const toBlob = (cv) => new Promise((res) => cv.toBlob(res, 'image/png'));
+  // 契约是「给出 blob，或者给出 null」，调用方都按 `if (!blob)` 走降级。但它以前会 reject：
+  //   · 二维码是 SVG，画进 canvas 会污染画布 —— 老 WebKit 和微信 X5 内核上 toBlob 直接抛 SecurityError；
+  //   · 老 WebView 干脆没有 canvas.toBlob，读属性就是 TypeError。
+  // 两种都从 await 处逃出去变成没人接的 rejection：面板不弹、也不报错，用户只看到菜单闪一下。
+  const toBlob = (cv) => new Promise((res) => {
+    try { cv.toBlob(res, 'image/png'); }
+    catch (e) { res(null); }
+  });
 
   async function share(session, L) {
-    const cv = drawCard(session, L);
-    const blob = await toBlob(cv);
+    // 同 Room.share()：调用方（App.shareImage）既不 await 也不 catch，抛出去就是静默失败
+    let blob = null;
+    try { blob = await toBlob(drawCard(session, L)); }
+    catch (e) { blob = null; }
     if (!blob) { alert('生成图片失败，请截图代替'); return; }
     const file = new File([blob], '跑得快战绩.png', { type: 'image/png' });
     // 1) 系统分享面板（iOS Safari 15+ / Android Chrome）
