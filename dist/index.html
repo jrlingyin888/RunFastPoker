@@ -1237,7 +1237,9 @@ var RunfastRoom = (function () {
   function payHint(v) {
     const raw = String(v).trim();
     const price = state.room.pricePerCardFen;
-    if (!raw) return '1 分 = ' + L.fenToYuan(price) + ' 元 · 全关就输 20';
+    // 只报单价，不提「全关就输 20」：分数是自由输入的，而且各家规矩不一样，
+    // 写死一个数只会误导那些不打这条规则的人。
+    if (!raw) return '1 分 = ' + L.fenToYuan(price) + ' 元';
     const n = Number(raw);
     if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数分数';
     return n + ' 分 = ' + L.fenToYuan(n * price) + ' 元';
