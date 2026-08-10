@@ -49,7 +49,8 @@
     let lastRoom = null;
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
-      <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
+      <h1 style="text-align:center;margin:20px 0 14px">🃏 跑得快记分</h1>
+      ${U.disclaimer()}
       ${view.notice ? `<div class="notice"><span>${esc(view.notice)}</span><button class="notice-x" onclick="App.dismissNotice()">×</button></div>` : ''}
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
@@ -97,7 +98,7 @@
                   ${view.sel.length ? `<div class="muted" style="margin-top:10px">本场玩家（${view.sel.length}）：${view.sel.map(esc).join('、')}</div>` : ''}`}`}
       </div>
       <div class="card">
-        <div class="section-title">每张牌单价（元）</div>
+        <div class="section-title">每张牌算几分</div>
         <input type="text" id="price" inputmode="decimal" value="${esc(view.price)}" placeholder="如 1 或 0.5">
       </div>
       <button class="btn btn-primary" onclick="App.startSession()">${isOnline ? '创建房间' : '开始记分'}</button>`;
@@ -130,14 +131,14 @@
     return `
       ${topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
       <div class="card">
-        <div class="section-title">${view.from === 'room' ? '当前' : '最终'}盈亏（${L.sessionSize(s)} · ${yuan(s.pricePerCardFen)}元/张）</div>
+        <div class="section-title">${view.from === 'room' ? '当前' : '最终'}总分（${L.sessionSize(s)} · ${yuan(s.pricePerCardFen)}分/张）</div>
         ${net.map((p) => `<div class="row"><span>${esc(p.name)}</span>
-          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span></div>`).join('')}
+          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 分</span></div>`).join('')}
       </div>
       <div class="card">
-        <div class="section-title">💸 转账方案（最少笔数）</div>
-        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 转给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
-          || '<div class="muted">全部打平，无需转账</div>'}
+        <div class="section-title">结算方案（最少笔数）</div>
+        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 分</span></div>`).join('')
+          || '<div class="muted">全部打平，不用结</div>'}
       </div>
       <button class="btn btn-primary" onclick="App.shareImage()">📤 分享战绩图</button>
       <div class="gap"></div>
@@ -399,7 +400,7 @@
 
     async startSession() {
       const priceFen = L.yuanToFen(document.getElementById('price').value.trim());
-      if (Number.isNaN(priceFen)) { alert('单价格式不对，例：1 或 0.5'); return; }
+      if (Number.isNaN(priceFen)) { alert('「每张牌算几分」填得不对，例：1 或 0.5'); return; }
       if (view.mode === 'online') {
         const name = (document.getElementById('myName').value || '').trim();
         if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }

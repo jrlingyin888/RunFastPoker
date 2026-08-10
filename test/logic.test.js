@@ -134,14 +134,14 @@ test('settleUp：全部打平返回空数组', () => {
   assert.deepEqual(L.settleUp([{ name: 'A', fen: 0 }, { name: 'B', fen: 0 }]), []);
 });
 
-test('summaryText：包含标题、盈亏与转账行', () => {
+test('summaryText：包含标题、总分与结算行', () => {
   const text = L.summaryText(demoSession());
   assert.ok(text.includes('跑得快战绩'));
   assert.ok(text.includes('共 2 局'));
-  assert.ok(text.includes('1元/张'));
-  assert.ok(text.includes('张三：+25 元'));
-  assert.ok(text.includes('戴六：-25 元'));
-  assert.ok(text.includes('戴六 → 张三：25 元'));
+  assert.ok(text.includes('1分/张'));
+  assert.ok(text.includes('张三：+25 分'));
+  assert.ok(text.includes('戴六：-25 分'));
+  assert.ok(text.includes('戴六 → 张三：25 分'));
 });
 
 test('sessionNet：玩家名与原型属性同名也能正确结算', () => {
@@ -226,8 +226,8 @@ test('settleUp / summaryText 吃只有 transfers 的场', () => {
     { from: '王五', to: '张三', fen: 300 },
   ]);
   const txt = L.summaryText(s);
-  assert.ok(txt.includes('张三：+8 元'));
-  assert.ok(txt.includes('李四 → 张三：5 元'));
+  assert.ok(txt.includes('张三：+8 分'));
+  assert.ok(txt.includes('李四 → 张三：5 分'));
 });
 
 test('sessionNet：流水引用了不在 players 里的名字会被丢弃（既有行为，此处钉住）', () => {

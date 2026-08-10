@@ -289,8 +289,9 @@ var RunfastRoom = (function () {
     const oldRounds = state.local ? (state.session.rounds || []).length : 0;
     const size = state.local ? L.sessionSize(state.session) : S.txList(r).length + ' 笔';
     return `
-      ${U.topbar('已记 ' + size + ' · ' + price + '元/张', 'App.goHome()', actions)}
+      ${U.topbar('已记 ' + size + ' · ' + price + '分/张', 'App.goHome()', actions)}
       ${bar}
+      ${U.disclaimer()}
       <div class="card">
         <div class="players">
           ${pids.map((pid) => seatHtml(pid, net[pid] || 0)).join('')}
@@ -358,13 +359,13 @@ var RunfastRoom = (function () {
             : `<span class="ava" style="background:#9ca3af">?</span>
                <span class="nm">选择付款人 ▾</span><span class="muted">点这里选人</span>`}
         </button>
-        <div class="pay-arrow"><div>支出 分数</div><div>→</div></div>
+        <div class="pay-arrow"><div>支出 张数</div><div>→</div></div>
         <div class="pay-who">
           <span class="ava" style="background:${U.avatarColor(to.name)}">${esc(U.initial(to.name))}</span>
           <span class="nm">${esc(to.name)}</span><span class="muted">赢家</span>
         </div>
       </div>
-      <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出分数"
+      <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出张数"
              value="${esc(keep)}" oninput="Room.previewPay(this.value)">
       <div class="muted pay-hint" id="payHint">${payHint(keep)}</div>
       <button class="btn btn-primary" ${from ? '' : 'disabled style="opacity:.4"'} onclick="Room.submitPay()">支出</button>
@@ -380,10 +381,10 @@ var RunfastRoom = (function () {
     const price = state.room.pricePerCardFen;
     // 只报单价，不提「全关就输 20」：分数是自由输入的，而且各家规矩不一样，
     // 写死一个数只会误导那些不打这条规则的人。
-    if (!raw) return '1 分 = ' + L.fenToYuan(price) + ' 元';
+    if (!raw) return '1 张 = ' + L.fenToYuan(price) + ' 分';
     const n = Number(raw);
-    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数分数';
-    return n + ' 分 = ' + L.fenToYuan(n * price) + ' 元';
+    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数张数';
+    return n + ' 张 = ' + L.fenToYuan(n * price) + ' 分';
   }
 
   // ---------- 订阅并进入记分页 ----------
@@ -531,7 +532,7 @@ var RunfastRoom = (function () {
         label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
         data: { 'room-act': 'payer', pid },
       }));
-      U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
+      U.openSheet(items, '<div class="sheet-head">谁支出这几张？</div>');
     },
     setPayer(pid) { state.payFrom = pid; renderPay(); },
     showAllTx() { state.txAll = true; host.render(); },
@@ -540,11 +541,11 @@ var RunfastRoom = (function () {
       const raw = ((document.getElementById('payPoints') || {}).value || '').trim();
       const n = Number(raw);
       if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) {
-        alert('请输入 1～9999 的整数分数'); return;
+        alert('请输入 1～9999 的整数张数'); return;
       }
       const ps = state.room.players;
       const from = state.payFrom, to = state.payTo;
-      if (!from) { alert('先点上面的头像选一下：这笔分是谁支出的'); return; }
+      if (!from) { alert('先点上面的头像选一下：这几张是谁支出的'); return; }
       // 弹窗开着的这段时间房间可能变了（对方退出、甚至联机端收到别的设备的广播）——提交前复查一遍，
       // 不能光信弹窗打开那一刻缓存的 from/to 还有效。
       if (!ps[from] || ps[from].left || !ps[to] || ps[to].left) {
@@ -673,7 +674,7 @@ var RunfastRoom = (function () {
       U.openSheet([
         // 「谁赢了点谁的头像」记的是「我付给 TA」，自己赢了就得由输的人点。可输的人不一定有手机
         // （＋加进来的代记玩家），或干脆只有我这一台设备在记——没有这个入口就永远记不上自己赢的分。
-        { label: '💰 有人给我记分', onclick: 'Room.payMe()' },
+        { label: '📥 有人给我记分', onclick: 'Room.payMe()' },
         { label: '✏️ 更新昵称', onclick: 'Room.rename()' },
         { label: '🚪 退出房间', onclick: 'Room.leave()', danger: true },
       ], `<div class="sheet-head">${esc(p.name)}</div>`);
@@ -699,7 +700,7 @@ var RunfastRoom = (function () {
     // ⋯：结算方案随时可看，结束本场谁都能点
     more() {
       const items = [
-        { label: '💰 结算方案', onclick: 'Room.settle()' },
+        { label: '🧮 结算方案', onclick: 'Room.settle()' },
         { label: '🏁 结束本场', onclick: 'Room.finish()' },
       ];
       if (!state.local) {

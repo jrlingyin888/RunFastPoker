@@ -112,6 +112,10 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 /* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
+/* 合规声明条：常驻不可关，克制到不抢戏，但每屏都看得见 */
+.disclaimer { background: rgba(0,0,0,.22); border: 1px solid rgba(255,253,246,.14);
+  color: rgba(255,253,246,.6); border-radius: 10px; padding: 7px 12px;
+  margin-bottom: 12px; font-size: 12.5px; line-height: 1.5; text-align: center; }
 .notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
   border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
   border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
@@ -146,7 +150,15 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 <div id="app"></div>
 <!--RUNFAST_HOST-->
 <script>
-// 跑得快结算纯函数。金额一律以"分"（整数）计算。
+// 跑得快结算纯函数。
+//
+// ⚠️ 单位有两套，别搞混：
+//   · 界面上只有两个单位——「张」（牌数，就是每笔记的那个数）和「分」（张数 × 每张几分）。
+//     整个产品不涉及金钱，界面上不出现「元」。
+//   · 代码里沿用旧名字 fen / pricePerCardFen / fenToYuan / yuanToFen，它们表示的是
+//     **界面那个「分」的 1/100**（内部一律整数，避免浮点误差）。改名要动服务端 canWrite
+//     的校验、每个人手机里存着的历史快照和备份文件，收益只是好听，所以留着没动。
+//     记住这条映射即可：内部 fen ÷ 100 = 界面上显示的「分」。
 // 浏览器：全局 RunfastLogic；Node：module.exports（供测试）。
 var RunfastLogic = (function () {
   'use strict';
@@ -154,14 +166,14 @@ var RunfastLogic = (function () {
   const HAND_SIZE = 10;
   const SHUTOUT_MULTIPLIER = 2;
 
-  // 元字符串 -> 分。非法（非数字/超两位小数/<=0）返回 NaN。
+  // 界面「分」字符串 -> 内部整数。非法（非数字/超两位小数/<=0）返回 NaN。
   function yuanToFen(str) {
     if (typeof str !== 'string' || !/^\d+(\.\d{1,2})?$/.test(str.trim())) return NaN;
     const fen = Math.round(parseFloat(str) * 100);
     return fen > 0 ? fen : NaN;
   }
 
-  // 分 -> 元字符串，去多余的零：100->'1'，50->'0.5'，105->'1.05'
+  // 内部整数 -> 界面「分」字符串，去多余的零：100->'1'，50->'0.5'，105->'1.05'
   function fenToYuan(fen) {
     const sign = fen < 0 ? '-' : '';
     const abs = Math.abs(fen);
@@ -260,15 +272,15 @@ var RunfastLogic = (function () {
     const d = new Date(session.createdAt);
     const lines = [];
     lines.push('【跑得快战绩】' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
-    lines.push('共 ' + sessionSize(session) + ' · ' + fenToYuan(session.pricePerCardFen) + '元/张');
-    lines.push('— 盈亏 —');
+    lines.push('共 ' + sessionSize(session) + ' · ' + fenToYuan(session.pricePerCardFen) + '分/张');
+    lines.push('— 总分 —');
     sessionNet(session)
       .slice().sort((a, b) => b.fen - a.fen)
-      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 元'));
+      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 分'));
     const pays = settleUp(sessionNet(session));
     if (pays.length) {
-      lines.push('— 转账 —');
-      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 元'));
+      lines.push('— 结算 —');
+      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 分'));
     }
     return lines.join('\n');
   }
@@ -589,6 +601,11 @@ var RunfastUI = (function () {
   // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
   // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
   // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。
+  // 合规声明条。首页和记分页常驻、不可关闭（跟 .notice 不同，那个是可关的临时提示）。
+  // 这个产品只记「张」和「分」两个游戏内单位，不涉及任何金钱结算——声明写在最显眼的地方。
+  const disclaimer = () =>
+    '<div class="disclaimer">此项目功能不涉及金钱，请勿用于违法行为</div>';
+
   function closeSheet() { const el = document.getElementById('sheet'); if (el) el.remove(); }
   function openSheet(items, headerHtml) {
     closeSheet();
@@ -623,7 +640,7 @@ var RunfastUI = (function () {
     }
   }
 
-  const api = { esc, validName, avatarColor, initial, topbar, openSheet, closeSheet, copyToClipboard };
+  const api = { esc, validName, avatarColor, initial, topbar, disclaimer, openSheet, closeSheet, copyToClipboard };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
@@ -671,16 +688,16 @@ var RunfastShare = (function () {
     ctx.fillText('🃏 跑得快战绩', W / 2, 72);
     ctx.fillStyle = 'rgba(255,255,255,.65)';
     font(400, 24);
-    ctx.fillText(dateStr + ' · 共 ' + L.sessionSize(session) + ' · ' + L.fenToYuan(session.pricePerCardFen) + '元/张', W / 2, 116);
+    ctx.fillText(dateStr + ' · 共 ' + L.sessionSize(session) + ' · ' + L.fenToYuan(session.pricePerCardFen) + '分/张', W / 2, 116);
     ctx.strokeStyle = 'rgba(255,255,255,.25)';
     ctx.beginPath(); ctx.moveTo(PAD, 150); ctx.lineTo(W - PAD, 150); ctx.stroke();
 
-    // 盈亏区
+    // 总分区
     let y = headH + 30;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(255,255,255,.55)';
     font(600, 22);
-    ctx.fillText('盈 亏', PAD, y);
+    ctx.fillText('总 分', PAD, y);
     y += 16;
     net.forEach((p) => {
       y += LINE_H;
@@ -691,16 +708,16 @@ var RunfastShare = (function () {
       ctx.textAlign = 'right';
       ctx.fillStyle = p.fen > 0 ? '#fbbf24' : p.fen < 0 ? '#86efac' : 'rgba(255,255,255,.6)';
       font(700, 28);
-      ctx.fillText((p.fen > 0 ? '+' : '') + L.fenToYuan(p.fen) + ' 元', W - PAD, y);
+      ctx.fillText((p.fen > 0 ? '+' : '') + L.fenToYuan(p.fen) + ' 分', W - PAD, y);
     });
 
-    // 转账区
+    // 结算区
     if (pays.length) {
       y += 60;
       ctx.textAlign = 'left';
       ctx.fillStyle = 'rgba(255,255,255,.55)';
       font(600, 22);
-      ctx.fillText('转 账', PAD, y);
+      ctx.fillText('结 算', PAD, y);
       y += 16;
       pays.forEach((t) => {
         y += LINE_H;
@@ -711,7 +728,7 @@ var RunfastShare = (function () {
         ctx.textAlign = 'right';
         ctx.fillStyle = '#fbbf24';
         font(700, 26);
-        ctx.fillText(L.fenToYuan(t.fen) + ' 元', W - PAD, y);
+        ctx.fillText(L.fenToYuan(t.fen) + ' 分', W - PAD, y);
       });
     }
 
@@ -1148,8 +1165,9 @@ var RunfastRoom = (function () {
     const oldRounds = state.local ? (state.session.rounds || []).length : 0;
     const size = state.local ? L.sessionSize(state.session) : S.txList(r).length + ' 笔';
     return `
-      ${U.topbar('已记 ' + size + ' · ' + price + '元/张', 'App.goHome()', actions)}
+      ${U.topbar('已记 ' + size + ' · ' + price + '分/张', 'App.goHome()', actions)}
       ${bar}
+      ${U.disclaimer()}
       <div class="card">
         <div class="players">
           ${pids.map((pid) => seatHtml(pid, net[pid] || 0)).join('')}
@@ -1217,13 +1235,13 @@ var RunfastRoom = (function () {
             : `<span class="ava" style="background:#9ca3af">?</span>
                <span class="nm">选择付款人 ▾</span><span class="muted">点这里选人</span>`}
         </button>
-        <div class="pay-arrow"><div>支出 分数</div><div>→</div></div>
+        <div class="pay-arrow"><div>支出 张数</div><div>→</div></div>
         <div class="pay-who">
           <span class="ava" style="background:${U.avatarColor(to.name)}">${esc(U.initial(to.name))}</span>
           <span class="nm">${esc(to.name)}</span><span class="muted">赢家</span>
         </div>
       </div>
-      <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出分数"
+      <input type="text" id="payPoints" inputmode="numeric" placeholder="输入支出张数"
              value="${esc(keep)}" oninput="Room.previewPay(this.value)">
       <div class="muted pay-hint" id="payHint">${payHint(keep)}</div>
       <button class="btn btn-primary" ${from ? '' : 'disabled style="opacity:.4"'} onclick="Room.submitPay()">支出</button>
@@ -1239,10 +1257,10 @@ var RunfastRoom = (function () {
     const price = state.room.pricePerCardFen;
     // 只报单价，不提「全关就输 20」：分数是自由输入的，而且各家规矩不一样，
     // 写死一个数只会误导那些不打这条规则的人。
-    if (!raw) return '1 分 = ' + L.fenToYuan(price) + ' 元';
+    if (!raw) return '1 张 = ' + L.fenToYuan(price) + ' 分';
     const n = Number(raw);
-    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数分数';
-    return n + ' 分 = ' + L.fenToYuan(n * price) + ' 元';
+    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) return '请输入 1～9999 的整数张数';
+    return n + ' 张 = ' + L.fenToYuan(n * price) + ' 分';
   }
 
   // ---------- 订阅并进入记分页 ----------
@@ -1390,7 +1408,7 @@ var RunfastRoom = (function () {
         label: r.players[pid].name + (!state.local && pid === state.pid ? '（我）' : ''),
         data: { 'room-act': 'payer', pid },
       }));
-      U.openSheet(items, '<div class="sheet-head">谁支出这笔分？</div>');
+      U.openSheet(items, '<div class="sheet-head">谁支出这几张？</div>');
     },
     setPayer(pid) { state.payFrom = pid; renderPay(); },
     showAllTx() { state.txAll = true; host.render(); },
@@ -1399,11 +1417,11 @@ var RunfastRoom = (function () {
       const raw = ((document.getElementById('payPoints') || {}).value || '').trim();
       const n = Number(raw);
       if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n <= 0 || n > 9999) {
-        alert('请输入 1～9999 的整数分数'); return;
+        alert('请输入 1～9999 的整数张数'); return;
       }
       const ps = state.room.players;
       const from = state.payFrom, to = state.payTo;
-      if (!from) { alert('先点上面的头像选一下：这笔分是谁支出的'); return; }
+      if (!from) { alert('先点上面的头像选一下：这几张是谁支出的'); return; }
       // 弹窗开着的这段时间房间可能变了（对方退出、甚至联机端收到别的设备的广播）——提交前复查一遍，
       // 不能光信弹窗打开那一刻缓存的 from/to 还有效。
       if (!ps[from] || ps[from].left || !ps[to] || ps[to].left) {
@@ -1532,7 +1550,7 @@ var RunfastRoom = (function () {
       U.openSheet([
         // 「谁赢了点谁的头像」记的是「我付给 TA」，自己赢了就得由输的人点。可输的人不一定有手机
         // （＋加进来的代记玩家），或干脆只有我这一台设备在记——没有这个入口就永远记不上自己赢的分。
-        { label: '💰 有人给我记分', onclick: 'Room.payMe()' },
+        { label: '📥 有人给我记分', onclick: 'Room.payMe()' },
         { label: '✏️ 更新昵称', onclick: 'Room.rename()' },
         { label: '🚪 退出房间', onclick: 'Room.leave()', danger: true },
       ], `<div class="sheet-head">${esc(p.name)}</div>`);
@@ -1558,7 +1576,7 @@ var RunfastRoom = (function () {
     // ⋯：结算方案随时可看，结束本场谁都能点
     more() {
       const items = [
-        { label: '💰 结算方案', onclick: 'Room.settle()' },
+        { label: '🧮 结算方案', onclick: 'Room.settle()' },
         { label: '🏁 结束本场', onclick: 'Room.finish()' },
       ];
       if (!state.local) {
@@ -1695,7 +1713,8 @@ var RunfastRoom = (function () {
     let lastRoom = null;
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
-      <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
+      <h1 style="text-align:center;margin:20px 0 14px">🃏 跑得快记分</h1>
+      ${U.disclaimer()}
       ${view.notice ? `<div class="notice"><span>${esc(view.notice)}</span><button class="notice-x" onclick="App.dismissNotice()">×</button></div>` : ''}
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}
@@ -1743,7 +1762,7 @@ var RunfastRoom = (function () {
                   ${view.sel.length ? `<div class="muted" style="margin-top:10px">本场玩家（${view.sel.length}）：${view.sel.map(esc).join('、')}</div>` : ''}`}`}
       </div>
       <div class="card">
-        <div class="section-title">每张牌单价（元）</div>
+        <div class="section-title">每张牌算几分</div>
         <input type="text" id="price" inputmode="decimal" value="${esc(view.price)}" placeholder="如 1 或 0.5">
       </div>
       <button class="btn btn-primary" onclick="App.startSession()">${isOnline ? '创建房间' : '开始记分'}</button>`;
@@ -1776,14 +1795,14 @@ var RunfastRoom = (function () {
     return `
       ${topbar(fmtDate(s.createdAt) + ' 战绩', backJs)}
       <div class="card">
-        <div class="section-title">${view.from === 'room' ? '当前' : '最终'}盈亏（${L.sessionSize(s)} · ${yuan(s.pricePerCardFen)}元/张）</div>
+        <div class="section-title">${view.from === 'room' ? '当前' : '最终'}总分（${L.sessionSize(s)} · ${yuan(s.pricePerCardFen)}分/张）</div>
         ${net.map((p) => `<div class="row"><span>${esc(p.name)}</span>
-          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 元</span></div>`).join('')}
+          <span class="${cls(p.fen)}">${p.cards > 0 ? '+' : ''}${p.cards} 张 · ${signYuan(p.fen)} 分</span></div>`).join('')}
       </div>
       <div class="card">
-        <div class="section-title">💸 转账方案（最少笔数）</div>
-        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 转给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 元</span></div>`).join('')
-          || '<div class="muted">全部打平，无需转账</div>'}
+        <div class="section-title">结算方案（最少笔数）</div>
+        ${pays.map((t) => `<div class="row"><span>${esc(t.from)} 给 ${esc(t.to)}</span><span class="pos">${yuan(t.fen)} 分</span></div>`).join('')
+          || '<div class="muted">全部打平，不用结</div>'}
       </div>
       <button class="btn btn-primary" onclick="App.shareImage()">📤 分享战绩图</button>
       <div class="gap"></div>
@@ -2045,7 +2064,7 @@ var RunfastRoom = (function () {
 
     async startSession() {
       const priceFen = L.yuanToFen(document.getElementById('price').value.trim());
-      if (Number.isNaN(priceFen)) { alert('单价格式不对，例：1 或 0.5'); return; }
+      if (Number.isNaN(priceFen)) { alert('「每张牌算几分」填得不对，例：1 或 0.5'); return; }
       if (view.mode === 'online') {
         const name = (document.getElementById('myName').value || '').trim();
         if (!validName(name)) { alert('名字需 1～8 个字，且不能含引号等特殊符号'); return; }

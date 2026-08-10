@@ -32,6 +32,11 @@ var RunfastUI = (function () {
   // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
   // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
   // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。
+  // 合规声明条。首页和记分页常驻、不可关闭（跟 .notice 不同，那个是可关的临时提示）。
+  // 这个产品只记「张」和「分」两个游戏内单位，不涉及任何金钱结算——声明写在最显眼的地方。
+  const disclaimer = () =>
+    '<div class="disclaimer">此项目功能不涉及金钱，请勿用于违法行为</div>';
+
   function closeSheet() { const el = document.getElementById('sheet'); if (el) el.remove(); }
   function openSheet(items, headerHtml) {
     closeSheet();
@@ -66,7 +71,7 @@ var RunfastUI = (function () {
     }
   }
 
-  const api = { esc, validName, avatarColor, initial, topbar, openSheet, closeSheet, copyToClipboard };
+  const api = { esc, validName, avatarColor, initial, topbar, disclaimer, openSheet, closeSheet, copyToClipboard };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();

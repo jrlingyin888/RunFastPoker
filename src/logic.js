@@ -1,4 +1,12 @@
-// 跑得快结算纯函数。金额一律以"分"（整数）计算。
+// 跑得快结算纯函数。
+//
+// ⚠️ 单位有两套，别搞混：
+//   · 界面上只有两个单位——「张」（牌数，就是每笔记的那个数）和「分」（张数 × 每张几分）。
+//     整个产品不涉及金钱，界面上不出现「元」。
+//   · 代码里沿用旧名字 fen / pricePerCardFen / fenToYuan / yuanToFen，它们表示的是
+//     **界面那个「分」的 1/100**（内部一律整数，避免浮点误差）。改名要动服务端 canWrite
+//     的校验、每个人手机里存着的历史快照和备份文件，收益只是好听，所以留着没动。
+//     记住这条映射即可：内部 fen ÷ 100 = 界面上显示的「分」。
 // 浏览器：全局 RunfastLogic；Node：module.exports（供测试）。
 var RunfastLogic = (function () {
   'use strict';
@@ -6,14 +14,14 @@ var RunfastLogic = (function () {
   const HAND_SIZE = 10;
   const SHUTOUT_MULTIPLIER = 2;
 
-  // 元字符串 -> 分。非法（非数字/超两位小数/<=0）返回 NaN。
+  // 界面「分」字符串 -> 内部整数。非法（非数字/超两位小数/<=0）返回 NaN。
   function yuanToFen(str) {
     if (typeof str !== 'string' || !/^\d+(\.\d{1,2})?$/.test(str.trim())) return NaN;
     const fen = Math.round(parseFloat(str) * 100);
     return fen > 0 ? fen : NaN;
   }
 
-  // 分 -> 元字符串，去多余的零：100->'1'，50->'0.5'，105->'1.05'
+  // 内部整数 -> 界面「分」字符串，去多余的零：100->'1'，50->'0.5'，105->'1.05'
   function fenToYuan(fen) {
     const sign = fen < 0 ? '-' : '';
     const abs = Math.abs(fen);
@@ -112,15 +120,15 @@ var RunfastLogic = (function () {
     const d = new Date(session.createdAt);
     const lines = [];
     lines.push('【跑得快战绩】' + d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()));
-    lines.push('共 ' + sessionSize(session) + ' · ' + fenToYuan(session.pricePerCardFen) + '元/张');
-    lines.push('— 盈亏 —');
+    lines.push('共 ' + sessionSize(session) + ' · ' + fenToYuan(session.pricePerCardFen) + '分/张');
+    lines.push('— 总分 —');
     sessionNet(session)
       .slice().sort((a, b) => b.fen - a.fen)
-      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 元'));
+      .forEach((p) => lines.push(p.name + '：' + (p.fen > 0 ? '+' : '') + fenToYuan(p.fen) + ' 分'));
     const pays = settleUp(sessionNet(session));
     if (pays.length) {
-      lines.push('— 转账 —');
-      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 元'));
+      lines.push('— 结算 —');
+      pays.forEach((t) => lines.push(t.from + ' → ' + t.to + '：' + fenToYuan(t.fen) + ' 分'));
     }
     return lines.join('\n');
   }

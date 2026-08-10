@@ -105,6 +105,10 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 /* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
+/* 合规声明条：常驻不可关，克制到不抢戏，但每屏都看得见 */
+.disclaimer { background: rgba(0,0,0,.22); border: 1px solid rgba(255,253,246,.14);
+  color: rgba(255,253,246,.6); border-radius: 10px; padding: 7px 12px;
+  margin-bottom: 12px; font-size: 12.5px; line-height: 1.5; text-align: center; }
 .notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
   border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
   border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }

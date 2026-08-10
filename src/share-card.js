@@ -39,16 +39,16 @@ var RunfastShare = (function () {
     ctx.fillText('🃏 跑得快战绩', W / 2, 72);
     ctx.fillStyle = 'rgba(255,255,255,.65)';
     font(400, 24);
-    ctx.fillText(dateStr + ' · 共 ' + L.sessionSize(session) + ' · ' + L.fenToYuan(session.pricePerCardFen) + '元/张', W / 2, 116);
+    ctx.fillText(dateStr + ' · 共 ' + L.sessionSize(session) + ' · ' + L.fenToYuan(session.pricePerCardFen) + '分/张', W / 2, 116);
     ctx.strokeStyle = 'rgba(255,255,255,.25)';
     ctx.beginPath(); ctx.moveTo(PAD, 150); ctx.lineTo(W - PAD, 150); ctx.stroke();
 
-    // 盈亏区
+    // 总分区
     let y = headH + 30;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(255,255,255,.55)';
     font(600, 22);
-    ctx.fillText('盈 亏', PAD, y);
+    ctx.fillText('总 分', PAD, y);
     y += 16;
     net.forEach((p) => {
       y += LINE_H;
@@ -59,16 +59,16 @@ var RunfastShare = (function () {
       ctx.textAlign = 'right';
       ctx.fillStyle = p.fen > 0 ? '#fbbf24' : p.fen < 0 ? '#86efac' : 'rgba(255,255,255,.6)';
       font(700, 28);
-      ctx.fillText((p.fen > 0 ? '+' : '') + L.fenToYuan(p.fen) + ' 元', W - PAD, y);
+      ctx.fillText((p.fen > 0 ? '+' : '') + L.fenToYuan(p.fen) + ' 分', W - PAD, y);
     });
 
-    // 转账区
+    // 结算区
     if (pays.length) {
       y += 60;
       ctx.textAlign = 'left';
       ctx.fillStyle = 'rgba(255,255,255,.55)';
       font(600, 22);
-      ctx.fillText('转 账', PAD, y);
+      ctx.fillText('结 算', PAD, y);
       y += 16;
       pays.forEach((t) => {
         y += LINE_H;
@@ -79,7 +79,7 @@ var RunfastShare = (function () {
         ctx.textAlign = 'right';
         ctx.fillStyle = '#fbbf24';
         font(700, 26);
-        ctx.fillText(L.fenToYuan(t.fen) + ' 元', W - PAD, y);
+        ctx.fillText(L.fenToYuan(t.fen) + ' 分', W - PAD, y);
       });
     }
 
