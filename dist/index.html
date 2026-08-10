@@ -15,6 +15,8 @@
   --ink: #1f2937;
   --win: #b45309;
   --lose: #047857;
+  /* 顶部合规声明条的高度：6 上 + 17.5 文字 + 6 下 + 1 边框 ≈ 31px，#app 靠它让位 */
+  --disclaimer-h: calc(31px + env(safe-area-inset-top));
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body {
@@ -31,7 +33,9 @@ body::after {
   content: "♥"; position: fixed; bottom: -50px; left: -30px; font-size: 240px;
   color: rgba(0,0,0,.12); pointer-events: none; z-index: 0;
 }
-#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); position: relative; z-index: 1; }
+#app { max-width: 520px; margin: 0 auto; min-height: 100vh;
+  padding: calc(14px + var(--disclaimer-h)) 16px calc(24px + env(safe-area-inset-bottom));
+  position: relative; z-index: 1; }
 h1 { font-size: 24px; color: var(--gold-soft); text-shadow: 0 1px 2px rgba(0,0,0,.4); letter-spacing: 2px; }
 .card { background: var(--cream); color: var(--ink); border-radius: 16px; padding: 16px; margin-bottom: 12px;
   box-shadow: 0 4px 14px rgba(0,0,0,.28), inset 0 0 0 1px rgba(212,175,55,.25); }
@@ -112,10 +116,14 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 /* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
-/* 合规声明条：常驻不可关，克制到不抢戏，但每屏都看得见 */
-.disclaimer { background: rgba(0,0,0,.22); border: 1px solid rgba(255,253,246,.14);
-  color: rgba(255,253,246,.6); border-radius: 10px; padding: 7px 12px;
-  margin-bottom: 12px; font-size: 12.5px; line-height: 1.5; text-align: center; }
+/* 合规声明条：固定在视口顶部，滚动也跟着，所有页面常驻不可关。
+   z-index 夹在 #app(1) 和弹窗(50/60) 之间——正文之上，但支出框/底部面板弹出时让位给它们。
+   高度写成变量给 #app 让位用；带 safe-area 顾及刘海屏。 */
+.disclaimer { position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  background: rgba(4,24,13,.94); border-bottom: 1px solid rgba(255,253,246,.14);
+  color: rgba(255,253,246,.62); font-size: 12.5px; line-height: 1.4; text-align: center;
+  padding: calc(6px + env(safe-area-inset-top)) 12px 6px;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
   border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
   border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }
@@ -147,6 +155,10 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 </style>
 </head>
 <body>
+<!-- 合规声明条：固定在视口顶部、不可关闭。
+     刻意放在 #app 外面——渲染是整页 $app.innerHTML= 覆盖，放里面的话每个视图都得记得加一遍，
+     将来新增一个页面就会漏；放外面它天然出现在每一屏，且重绘碰不到它、零重绘开销。 -->
+<div class="disclaimer">此项目功能不涉及金钱，请勿用于违法行为</div>
 <div id="app"></div>
 <!--RUNFAST_HOST-->
 <script>
@@ -601,11 +613,6 @@ var RunfastUI = (function () {
   // items 支持 onclick（静态、不带用户数据的按钮用）或 data（{key: value}，渲染成 data-key="esc(value)"，
   // 配合调用方自己装的事件委托读取——带「玩家」这类外部数据的按钮一律走 data，不拼进内联 onclick 的
   // JS 字符串：那是 esc() 管不到的上下文，属性值上的 esc() 才是真正安全的。
-  // 合规声明条。首页和记分页常驻、不可关闭（跟 .notice 不同，那个是可关的临时提示）。
-  // 这个产品只记「张」和「分」两个游戏内单位，不涉及任何金钱结算——声明写在最显眼的地方。
-  const disclaimer = () =>
-    '<div class="disclaimer">此项目功能不涉及金钱，请勿用于违法行为</div>';
-
   function closeSheet() { const el = document.getElementById('sheet'); if (el) el.remove(); }
   function openSheet(items, headerHtml) {
     closeSheet();
@@ -640,7 +647,7 @@ var RunfastUI = (function () {
     }
   }
 
-  const api = { esc, validName, avatarColor, initial, topbar, disclaimer, openSheet, closeSheet, copyToClipboard };
+  const api = { esc, validName, avatarColor, initial, topbar, openSheet, closeSheet, copyToClipboard };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   return api;
 })();
@@ -1167,7 +1174,6 @@ var RunfastRoom = (function () {
     return `
       ${U.topbar('已记 ' + size + ' · ' + price + '分/张', 'App.goHome()', actions)}
       ${bar}
-      ${U.disclaimer()}
       <div class="card">
         <div class="players">
           ${pids.map((pid) => seatHtml(pid, net[pid] || 0)).join('')}
@@ -1713,8 +1719,7 @@ var RunfastRoom = (function () {
     let lastRoom = null;
     try { lastRoom = JSON.parse(localStorage.getItem('runfast.sync.room') || 'null'); } catch (e) { /* 忽略 */ }
     return `
-      <h1 style="text-align:center;margin:20px 0 14px">🃏 跑得快记分</h1>
-      ${U.disclaimer()}
+      <h1 style="text-align:center;margin:20px 0 18px">🃏 跑得快记分</h1>
       ${view.notice ? `<div class="notice"><span>${esc(view.notice)}</span><button class="notice-x" onclick="App.dismissNotice()">×</button></div>` : ''}
       ${lastRoom && RunfastSync.configured() ? `<button class="btn btn-primary" onclick="App.rejoinRoom()">回到联机房间（${esc(lastRoom.code)}）</button><div class="gap"></div>` : ''}
       ${act ? `<button class="btn btn-primary" onclick="App.goSession()">继续本场（${act.players.map(esc).join('、')}）</button><div class="gap"></div>` : ''}

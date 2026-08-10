@@ -291,7 +291,6 @@ var RunfastRoom = (function () {
     return `
       ${U.topbar('已记 ' + size + ' · ' + price + '分/张', 'App.goHome()', actions)}
       ${bar}
-      ${U.disclaimer()}
       <div class="card">
         <div class="players">
           ${pids.map((pid) => seatHtml(pid, net[pid] || 0)).join('')}

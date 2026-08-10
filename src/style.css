@@ -8,6 +8,8 @@
   --ink: #1f2937;
   --win: #b45309;
   --lose: #047857;
+  /* 顶部合规声明条的高度：6 上 + 17.5 文字 + 6 下 + 1 边框 ≈ 31px，#app 靠它让位 */
+  --disclaimer-h: calc(31px + env(safe-area-inset-top));
 }
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body {
@@ -24,7 +26,9 @@ body::after {
   content: "♥"; position: fixed; bottom: -50px; left: -30px; font-size: 240px;
   color: rgba(0,0,0,.12); pointer-events: none; z-index: 0;
 }
-#app { max-width: 520px; margin: 0 auto; min-height: 100vh; padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); position: relative; z-index: 1; }
+#app { max-width: 520px; margin: 0 auto; min-height: 100vh;
+  padding: calc(14px + var(--disclaimer-h)) 16px calc(24px + env(safe-area-inset-bottom));
+  position: relative; z-index: 1; }
 h1 { font-size: 24px; color: var(--gold-soft); text-shadow: 0 1px 2px rgba(0,0,0,.4); letter-spacing: 2px; }
 .card { background: var(--cream); color: var(--ink); border-radius: 16px; padding: 16px; margin-bottom: 12px;
   box-shadow: 0 4px 14px rgba(0,0,0,.28), inset 0 0 0 1px rgba(212,175,55,.25); }
@@ -105,10 +109,14 @@ input[type=text] { width: 100%; padding: 12px; border: 1.5px solid #d1cbb8; bord
 .tip { background: rgba(0,0,0,.28); border: 1px solid rgba(212,175,55,.4); color: var(--gold-soft);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 /* 首页提示条：进不去房间之类的坏消息走这里，不用阻塞的 alert */
-/* 合规声明条：常驻不可关，克制到不抢戏，但每屏都看得见 */
-.disclaimer { background: rgba(0,0,0,.22); border: 1px solid rgba(255,253,246,.14);
-  color: rgba(255,253,246,.6); border-radius: 10px; padding: 7px 12px;
-  margin-bottom: 12px; font-size: 12.5px; line-height: 1.5; text-align: center; }
+/* 合规声明条：固定在视口顶部，滚动也跟着，所有页面常驻不可关。
+   z-index 夹在 #app(1) 和弹窗(50/60) 之间——正文之上，但支出框/底部面板弹出时让位给它们。
+   高度写成变量给 #app 让位用；带 safe-area 顾及刘海屏。 */
+.disclaimer { position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  background: rgba(4,24,13,.94); border-bottom: 1px solid rgba(255,253,246,.14);
+  color: rgba(255,253,246,.62); font-size: 12.5px; line-height: 1.4; text-align: center;
+  padding: calc(6px + env(safe-area-inset-top)) 12px 6px;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .notice { display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.3);
   border: 1px solid rgba(212,175,55,.45); color: var(--gold-soft);
   border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; line-height: 1.5; }

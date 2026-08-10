@@ -7,6 +7,10 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- 合规声明条：固定在视口顶部、不可关闭。
+     刻意放在 #app 外面——渲染是整页 $app.innerHTML= 覆盖，放里面的话每个视图都得记得加一遍，
+     将来新增一个页面就会漏；放外面它天然出现在每一屏，且重绘碰不到它、零重绘开销。 -->
+<div class="disclaimer">此项目功能不涉及金钱，请勿用于违法行为</div>
 <div id="app"></div>
 <!--RUNFAST_HOST-->
 <script src="logic.js"></script>
