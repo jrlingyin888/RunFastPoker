@@ -348,6 +348,7 @@ function createRunfastServer(options = {}) {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',                      // 叫 Nginx 反代别缓冲推送，不依赖站点里配 proxy_buffering off
         });
         sendFrame(res, rooms[code] || null);              // 首帧全量
         let set = subscribers.get(code);

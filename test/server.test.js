@@ -315,9 +315,11 @@ test('SSE：连上先收首帧全量，房间更新后收到广播', async () =>
   const port = await listen(server);
   await req(port, 'PUT', '/rooms/777888', sampleRoom(), { 'X-Device-Id': 'boss' });
   const frames = [];
+  let sseHeaders = {};
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { r.destroy(); reject(new Error('SSE 超时')); }, 4000);
     const r = http.request({ host: '127.0.0.1', port, method: 'GET', path: '/rooms/777888/events' }, (res) => {
+      sseHeaders = res.headers;
       let buf = '';
       res.on('data', (c) => {
         buf += c;
@@ -337,6 +339,7 @@ test('SSE：连上先收首帧全量，房间更新后收到广播', async () =>
     r.on('error', reject); r.end();
   });
   try {
+    assert.equal(sseHeaders['x-accel-buffering'], 'no');  // 换服务器时 Nginx 反代没配 proxy_buffering off 也不卡推送
     assert.equal(frames[0].path, '/');
     assert.equal(frames[0].data.status, 'active');    // 首帧全量
     // 之后只推被改的那一格：整房快照打到几百笔就是几十 KB，还要乘以房里的人数
