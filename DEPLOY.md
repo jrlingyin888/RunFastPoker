@@ -129,6 +129,7 @@ pm2 save
 - **反代改坏了、站点打不开？** 去宝塔「网站 → 反向代理 → ipa.ydyrx.top → 设置」看；实在不行删掉按下面「七」重建（目标 `http://127.0.0.1:8787`，发送域名保持 `$http_host`）。
 - **打开是「连接不是私密连接」、硬点进去是 400？** 说明请求没落到这个站点上，掉进了宝塔的兜底站点（`0.default.conf`：自签证书 + `return 400`）。多半是换了服务器、域名已经指过去了但站点没建——2026-09 换机就是这么挂的。
 - **牌友那边不实时刷新？** 实时推送（SSE）最怕 Nginx 缓冲。`server.js` 已在推送响应里带 `X-Accel-Buffering: no`，Nginx 会自动对这条连接关掉缓冲，普通反代就够；想再加一道保险，可在 `/www/server/panel/vhost/nginx/extension/ipa.ydyrx.top/` 下放个 `.conf` 写 `proxy_buffering off;`，然后 `nginx -t && nginx -s reload`。
+- **`update.sh` 拉代码很慢、报 `GnuTLS recv error` 或 `Failed to connect to github.com port 443`？** 国内服务器连 GitHub 看运气：2026-09 实测这台机器 DNS 解析 github.com 只给 `20.205.243.166`，而这个 IP 根本连不上；GitHub 另外几个 IP 能连。所以仓库里已设 `git config http.curloptResolve github.com:443:140.82.112.3,140.82.114.4,140.82.113.3,20.27.177.113`（只对这个仓库生效，不动系统 hosts），拉取从几分钟降到一两秒。哪天又连不上，先在宝塔终端逐个测：`timeout 6 bash -c '</dev/tcp/140.82.112.3/443' && echo OK`，把连不上的从这行里换掉。
 - **端口/安全组？** 我们对外只用 443（域名），8787 只在服务器本机，**不需要**在云安全组开 8787。
 - **房间数据安全吗？** **房号即口令**：这个服务没有账号体系，`GET /rooms/<6位房号>` 谁都能读——房间里全部玩家名、全部记分流水，以及**建房人的设备 id** 都在返回里；拿着这个设备 id 就能 `DELETE` 掉该房间。房号只有 6 位数字（一百万种），公网部署下是可以被扫出来的。因此**别把房号/二维码贴到公开的群或网页**，打完让建房人在结算页「关闭房间」（战绩已在各人手机的历史里，删房不影响）。这是无账号身份模型的固有属性，不是可以打补丁修掉的 bug。
 
@@ -144,7 +145,8 @@ git config --global http.version HTTP/1.1          # 这类服务器连 GitHub �
 apt-get update && apt-get install -y nodejs npm     # Ubuntu 24 给的是 Node 18.19，够用
 npm i -g pm2 --registry=https://registry.npmmirror.com
 cd /www/wwwroot && git clone https://github.com/jrlingyin888/runfast.git runfast
-cd runfast && PORT=8787 RUNFAST_NO_OPEN=1 pm2 start server.js --name runfast
+cd runfast && git config http.curloptResolve github.com:443:140.82.112.3,140.82.114.4,140.82.113.3,20.27.177.113   # 见「六」GitHub 那条
+PORT=8787 RUNFAST_NO_OPEN=1 pm2 start server.js --name runfast
 pm2 startup systemd -u root --hp /root && pm2 save  # 开机自启
 curl -I http://127.0.0.1:8787/                      # 看到 200 就对了
 ```
